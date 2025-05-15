@@ -1,0 +1,12 @@
+node:
+  id: node1
+  address: 127.0.0.1
+  port: 8080
+cluster:
+  peers:
+    - address: 127.0.0.1
+      port: 8081
+      id: node2
+    - address: 127.0.0.1
+      port: 8082
+      id: node3
