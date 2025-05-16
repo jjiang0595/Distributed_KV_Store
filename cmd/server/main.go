@@ -1,4 +1,4 @@
-package server
+package main
 
 import (
 	"distributed_kv_store/internal/cluster/types"
@@ -9,11 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"sync"
 )
-
-var tempStore = make(map[string][]byte)
-var mu sync.Mutex
 
 type Config struct {
 	Node struct {
@@ -81,13 +77,16 @@ func main() {
 			key := r.URL.Path[1:]
 			value, err := node.Get(key)
 			if err != nil {
-				http.Error(w, "key not found", http.StatusNotFound)
+				http.Error(w, "Key not found", http.StatusNotFound)
 				return
 			}
 			_, writeErr := w.Write(value)
 			if writeErr != nil {
 				return
 			}
+			fmt.Printf("GET successful for key: %s\n", key)
 		}
 	})
+	fmt.Printf("Listening on port %d\n", node.Port)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", node.Port), nil))
 }
