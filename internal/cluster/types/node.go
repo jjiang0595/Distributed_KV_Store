@@ -10,7 +10,7 @@ type Node struct {
 	Address string
 	Port    int
 	Data    map[string][]byte
-	mu      sync.Mutex
+	Mu      sync.Mutex
 }
 
 type NodeMap struct {
@@ -18,14 +18,14 @@ type NodeMap struct {
 }
 
 func (n *Node) Put(key string, value []byte) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.Mu.Lock()
+	defer n.Mu.Unlock()
 	n.Data[key] = value
 }
 
 func (n *Node) Get(key string) ([]byte, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.Mu.Lock()
+	defer n.Mu.Unlock()
 	val, ok := n.Data[key]
 	if !ok {
 		return nil, fmt.Errorf("404 - Key Not Found: %s", key)
