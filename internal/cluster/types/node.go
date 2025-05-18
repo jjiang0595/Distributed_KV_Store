@@ -6,11 +6,12 @@ import (
 )
 
 type Node struct {
-	ID      string
-	Address string
-	Port    int
-	Data    map[string][]byte
-	Mu      sync.Mutex
+	ID       string `yaml:"id"`
+	Address  string `yaml:"address"`
+	Port     int    `yaml:"port"`
+	GrpcPort int    `yaml:"grpc_port"`
+	Data     map[string][]byte
+	Mu       sync.Mutex
 }
 
 type NodeMap struct {
