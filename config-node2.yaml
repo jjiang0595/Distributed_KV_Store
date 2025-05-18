@@ -1,0 +1,15 @@
+node:
+  id: node2
+  address: 127.0.0.1
+  port: 8081
+  grpc_port: 6001
+cluster:
+  peers:
+    - id: node1
+      address: 127.0.0.1
+      port: 8080
+      grpc_port: 6000
+    - id: node3
+      address: 127.0.0.1
+      port: 8082
+      grpc_port: 6002
