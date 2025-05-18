@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -9,14 +10,17 @@ import (
 )
 
 func main() {
-	server := "http://127.0.0.1:8080/test1"
+	serverAddress := flag.String("server", "http://127.0.0.1:8080", "Server address")
+	key := flag.String("key", "", "Key")
+	flag.Parse()
 	message := []byte("HELLO")
 
-	putReq, err := http.NewRequest(http.MethodPut, server, bytes.NewBuffer(message))
+	url := fmt.Sprintf("%s/%s", *serverAddress, *key)
+	putReq, err := http.NewRequest(http.MethodPut, url, bytes.NewBuffer(message))
 	if err != nil {
 		log.Fatalf("Error creating request: %v", err)
 	}
-	getReq, err := http.NewRequest(http.MethodGet, server, nil)
+	getReq, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		log.Fatalf("Error creating request: %v", err)
 	}
@@ -26,7 +30,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)
 	}
-
 	resp, err = client.Do(getReq)
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)
