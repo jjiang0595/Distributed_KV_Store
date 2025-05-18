@@ -1,21 +1,29 @@
 package main
 
 import (
+	"distributed_kv_store/internal/cluster"
 	"distributed_kv_store/internal/cluster/types"
+	"flag"
 	"fmt"
+	"golang.org/x/net/context"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"gopkg.in/yaml.v3"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 )
 
 type Config struct {
 	Node struct {
-		ID      string `yaml:"id"`
-		Address string `yaml:"address"`
-		Port    string `yaml:"port"`
+		ID       string `yaml:"id"`
+		Address  string `yaml:"address"`
+		Port     string `yaml:"port"`
+		GrpcPort string `yaml:"grpc_port"`
 	} `yaml:"node"`
 	Cluster struct {
 		Peers []types.Node `yaml:"peers"`
@@ -43,7 +51,11 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 func main() {
-	cfg, err := LoadConfig("config.yaml")
+	configFile := flag.String("config", "config-node1.yaml", "Path to config file")
+	flag.Parse()
+	fmt.Printf("Starting server with configuration file: %s\n", *configFile) // Print the config file name
+
+	cfg, err := LoadConfig(*configFile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -51,12 +63,45 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	node := &types.Node{
-		ID:      cfg.Node.ID,
-		Address: cfg.Node.Address,
-		Port:    port,
-		Data:    make(map[string][]byte),
+	gRpcPort, err := strconv.Atoi(cfg.Node.GrpcPort)
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	node := &types.Node{
+		ID:       cfg.Node.ID,
+		Address:  cfg.Node.Address,
+		Port:     port,
+		GrpcPort: gRpcPort,
+		Data:     make(map[string][]byte),
+	}
+
+	var peers types.NodeMap
+	peers.Nodes = make([]types.Node, 0, len(cfg.Cluster.Peers))
+	for _, peer := range cfg.Cluster.Peers {
+		peers.Nodes = append(peers.Nodes, types.Node{
+			ID:       peer.ID,
+			Address:  peer.Address,
+			Port:     peer.Port,
+			GrpcPort: peer.GrpcPort,
+		})
+	}
+
+	grpcServer := grpc.NewServer()
+	replicationServer := cluster.NewReplicationServer(node)
+	cluster.RegisterReplicationServiceServer(grpcServer, replicationServer)
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", node.GrpcPort))
+	if err != nil {
+		log.Fatalf("Error listening on port %d: %v", node.GrpcPort, err)
+	}
+
+	go func() {
+		log.Printf("Listening on port %d", node.GrpcPort)
+		serveErr := grpcServer.Serve(listener)
+		if serveErr != nil {
+			log.Fatalf("Error serving on port %d: %v", node.GrpcPort, serveErr)
+		}
+	}()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
@@ -68,6 +113,42 @@ func main() {
 			}
 			defer r.Body.Close()
 			node.Put(key, body)
+			for _, peer := range peers.Nodes {
+				log.Printf("%s:%d", peer.Address, peer.GrpcPort)
+				conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", peer.Address, peer.GrpcPort),
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
+				)
+				if err != nil {
+					log.Printf("Error connecting to peer %s:%d %v", peer.Address, peer.Port, err)
+					if conn != nil {
+						conn.Close()
+					}
+					continue
+				}
+				defer conn.Close()
+				peerClient := cluster.NewReplicationServiceClient(conn)
+
+				req := &cluster.ReplicationRequest{
+					Key:   key,
+					Value: body,
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+
+				resp, err := peerClient.Replicate(ctx, req)
+				if err != nil {
+					log.Printf("Error replicating: %s:%d: %v", peer.Address, peer.Port, err)
+				} else {
+					log.Printf("Replicated to %s:%d. Success: %v", peer.Address, peer.Port, resp.GetSuccess())
+				}
+
+				err = conn.Close()
+				if err != nil {
+					log.Printf("Error closing connection to peer %s:%d: %v", peer.Address, peer.Port, err)
+				}
+				cancel()
+			}
 			w.WriteHeader(http.StatusOK)
 			_, printErr := fmt.Fprintf(w, "PUT successful for key: %s\n", key)
 			if printErr != nil {
@@ -82,6 +163,7 @@ func main() {
 			}
 			_, writeErr := w.Write(value)
 			if writeErr != nil {
+				log.Printf("Error writing response: %s\n", writeErr)
 				return
 			}
 			fmt.Printf("GET successful for key: %s\n", key)
