@@ -1,7 +1,12 @@
 package types
 
 import (
+	"encoding/gob"
 	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -14,11 +19,17 @@ const (
 	Leader    RaftState = "leader"
 )
 
+type RaftSavedState struct {
+	CurrentTerm uint64
+	VotedFor    string
+}
+
 type Node struct {
 	ID       string `yaml:"id"`
 	Address  string `yaml:"address"`
 	Port     int    `yaml:"port"`
 	GrpcPort int    `yaml:"grpc_port"`
+	DataDir  string `yaml:"data_dir"`
 
 	// KV Store Data
 	Data map[string][]byte
@@ -48,6 +59,100 @@ type LogEntry struct {
 	Index   uint64
 	Term    uint64
 	Command []byte
+}
+
+func (n *Node) SaveRaftState() error {
+	filePath := filepath.Join(n.DataDir, "raft_state.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		log.Printf("Error opening file: %v", err)
+	}
+	defer file.Close()
+
+	encoder := gob.NewEncoder(file)
+
+	savedState := &RaftSavedState{
+		CurrentTerm: n.CurrentTerm,
+		VotedFor:    n.VotedFor,
+	}
+	if err := encoder.Encode(savedState); err != nil {
+		return fmt.Errorf("error saving raft state: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("error saving raft state: %v", err)
+	}
+	return nil
+}
+
+func (n *Node) LoadRaftState() error {
+	filePath := filepath.Join(n.DataDir, "raft_state.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("Raft state file not found for node %s", n.ID)
+			return nil
+		}
+		log.Printf("Error opening file: %v", err)
+	}
+	defer file.Close()
+
+	decoder := gob.NewDecoder(file)
+	var savedState RaftSavedState
+	if err := decoder.Decode(&savedState); err != nil {
+		return fmt.Errorf("error decoding raft state: %v", err)
+	}
+	n.CurrentTerm = savedState.CurrentTerm
+	n.VotedFor = savedState.VotedFor
+	return nil
+}
+
+func (n *Node) AppendLogEntry(entry LogEntry) error {
+	filePath := filepath.Join(n.DataDir, "raft_log.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	encoder := gob.NewEncoder(file)
+	if err := encoder.Encode(entry); err != nil {
+		return fmt.Errorf("error encoding raft log: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("error saving raft log: %v", err)
+	}
+	return nil
+}
+
+func (n *Node) LoadRaftLog() error {
+	filePath := filepath.Join(n.DataDir, "raft_log.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("raft log file not found for node %s", n.ID)
+		}
+		return fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	decoder := gob.NewDecoder(file)
+	n.Log = make([]LogEntry, 0)
+	for {
+		var entry LogEntry
+		err := decoder.Decode(&entry)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("error decoding log entry: %v", err)
+		}
+		n.Log = append(n.Log, entry)
+	}
+	return nil
 }
 
 func (n *Node) Put(key string, value []byte) {
