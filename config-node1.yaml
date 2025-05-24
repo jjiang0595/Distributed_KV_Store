@@ -3,6 +3,7 @@ node:
   address: 127.0.0.1
   port: 8080
   grpc_port: 6000
+  data_dir: ./node_data/node1
 cluster:
   peers:
     - id: node2
