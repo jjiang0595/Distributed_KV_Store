@@ -1,6 +1,7 @@
 package types
 
 import (
+	pb "distributed_kv_store/internal/cluster"
 	"encoding/gob"
 	"fmt"
 	"io"
@@ -40,7 +41,7 @@ type Node struct {
 
 	CurrentTerm      uint64            // Latest term server
 	VotedFor         string            // Candidate ID that the node voted for
-	Log              []LogEntry        // Replicated messages log
+	Log              []*pb.LogEntry    // Replicated messages log
 	CommitIndex      uint64            // Index of highest log entry to be committed
 	State            RaftState         // Leader, Candidate, Follower
 	LeaderID         string            // Default "" if not leader, node ID otherwise
@@ -53,12 +54,6 @@ type Node struct {
 
 type NodeMap struct {
 	Nodes []Node
-}
-
-type LogEntry struct {
-	Index   uint64
-	Term    uint64
-	Command []byte
 }
 
 func (n *Node) SaveRaftState() error {
@@ -108,10 +103,10 @@ func (n *Node) LoadRaftState() error {
 	return nil
 }
 
-func (n *Node) AppendLogEntry(entry LogEntry) error {
+func (n *Node) AppendLogEntry(entry *pb.LogEntry) error {
 	filePath := filepath.Join(n.DataDir, "raft_log.gob")
 	fmt.Printf("%s", filePath)
-	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		return fmt.Errorf("error opening file: %v", err)
 	}
@@ -120,6 +115,30 @@ func (n *Node) AppendLogEntry(entry LogEntry) error {
 	encoder := gob.NewEncoder(file)
 	if err := encoder.Encode(entry); err != nil {
 		return fmt.Errorf("error encoding raft log: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("error saving raft log: %v", err)
+	}
+	return nil
+}
+
+func (n *Node) AppendLogEntries(entries []*pb.LogEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	filePath := filepath.Join(n.DataDir, "raft_log.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+	encoder := gob.NewEncoder(file)
+
+	for _, entry := range entries {
+		if err := encoder.Encode(entry); err != nil {
+			return fmt.Errorf("error encoding raft log: %v", err)
+		}
 	}
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("error saving raft log: %v", err)
@@ -140,9 +159,9 @@ func (n *Node) LoadRaftLog() error {
 	defer file.Close()
 
 	decoder := gob.NewDecoder(file)
-	n.Log = make([]LogEntry, 0)
+	n.Log = make([]*pb.LogEntry, 0)
 	for {
-		var entry LogEntry
+		var entry pb.LogEntry
 		err := decoder.Decode(&entry)
 		if err == io.EOF {
 			break
@@ -150,7 +169,7 @@ func (n *Node) LoadRaftLog() error {
 		if err != nil {
 			return fmt.Errorf("error decoding log entry: %v", err)
 		}
-		n.Log = append(n.Log, entry)
+		n.Log = append(n.Log, &entry)
 	}
 	return nil
 }
