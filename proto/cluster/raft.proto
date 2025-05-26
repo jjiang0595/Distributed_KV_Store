@@ -19,6 +19,7 @@ message RequestVoteRequest {
 message RequestVoteResponse {
   uint64 term = 1;
   bool voteGranted = 2;
+  string voterId = 3;
 }
 
 message AppendEntriesRequest {

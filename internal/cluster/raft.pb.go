@@ -93,6 +93,7 @@ type RequestVoteResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Term          uint64                 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
 	VoteGranted   bool                   `protobuf:"varint,2,opt,name=voteGranted,proto3" json:"voteGranted,omitempty"`
+	VoterId       string                 `protobuf:"bytes,3,opt,name=voterId,proto3" json:"voterId,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -139,6 +140,13 @@ func (x *RequestVoteResponse) GetVoteGranted() bool {
 		return x.VoteGranted
 	}
 	return false
+}
+
+func (x *RequestVoteResponse) GetVoterId() string {
+	if x != nil {
+		return x.VoterId
+	}
+	return ""
 }
 
 type AppendEntriesRequest struct {
@@ -346,10 +354,11 @@ const file_cluster_raft_proto_rawDesc = "" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12 \n" +
 	"\vcandidateId\x18\x02 \x01(\tR\vcandidateId\x12\"\n" +
 	"\flastLogIndex\x18\x03 \x01(\x04R\flastLogIndex\x12 \n" +
-	"\vlastLogTerm\x18\x04 \x01(\x04R\vlastLogTerm\"K\n" +
+	"\vlastLogTerm\x18\x04 \x01(\x04R\vlastLogTerm\"e\n" +
 	"\x13RequestVoteResponse\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12 \n" +
-	"\vvoteGranted\x18\x02 \x01(\bR\vvoteGranted\"\xdd\x01\n" +
+	"\vvoteGranted\x18\x02 \x01(\bR\vvoteGranted\x12\x18\n" +
+	"\avoterId\x18\x03 \x01(\tR\avoterId\"\xdd\x01\n" +
 	"\x14AppendEntriesRequest\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x1a\n" +
 	"\bleaderId\x18\x02 \x01(\tR\bleaderId\x12\"\n" +
