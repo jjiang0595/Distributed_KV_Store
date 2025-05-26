@@ -47,9 +47,30 @@ func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (
 		if err != nil {
 			return nil, err
 		}
-		return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: true}, nil
+		return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: true, VoterId: req.CandidateId}, nil
 	}
-	return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: false}, nil
+	return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: false, VoterId: req.CandidateId}, nil
+}
+
+func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
+	s.mainNode.RaftMu.Lock()
+	defer s.mainNode.RaftMu.Unlock()
+	term, voteGranted, voterId := req.Term, req.VoteGranted, req.VoterId
+	if term > s.mainNode.CurrentTerm {
+		s.mainNode.VotedFor = ""
+		s.mainNode.CurrentTerm = req.Term
+		s.mainNode.State = types.Follower
+		s.mainNode.LeaderID = ""
+		if err := s.mainNode.SaveRaftState(); err != nil {
+			log.Fatalf("error saving raft state: %v", err)
+		}
+		return
+	}
+
+	if term == s.mainNode.CurrentTerm && voteGranted {
+		s.mainNode.VotesReceived[voterId] = true
+		log.Printf("Received vote from follower %s to leader %s", voterId, s.mainNode.LeaderID)
+	}
 }
 
 func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
