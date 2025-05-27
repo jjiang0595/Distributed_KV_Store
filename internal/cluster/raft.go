@@ -2,20 +2,246 @@ package cluster
 
 import (
 	"context"
-	"distributed_kv_store/internal/cluster/types"
+	"encoding/gob"
+	"fmt"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
 )
+
+type RaftState string
+type CommandType string
+
+const (
+	Follower  RaftState = "follower"
+	Candidate RaftState = "candidate"
+	Leader    RaftState = "leader"
+)
+
+const (
+	CommandPut CommandType = "put"
+	CommandGet CommandType = "get"
+	CommandDel CommandType = "del"
+)
+
+const (
+	minElectionTimeoutMs = 150
+	maxElectionTimeoutMs = 300
+)
+
+type RaftSavedState struct {
+	CurrentTerm uint64
+	VotedFor    string
+}
+
+type Command struct {
+	Type  CommandType
+	Key   string
+	Value []byte
+}
+
+type Node struct {
+	ID       string `yaml:"id"`
+	Address  string `yaml:"address"`
+	Port     int    `yaml:"port"`
+	GrpcPort int    `yaml:"grpc_port"`
+	DataDir  string `yaml:"data_dir"`
+
+	// KV Store Data
+	Data map[string][]byte
+	Mu   sync.Mutex
+
+	// Raft
+	RaftMu sync.Mutex
+
+	CurrentTerm      uint64            // Latest term server
+	VotedFor         string            // Candidate ID that the node voted for
+	Log              []*LogEntry       // Replicated messages log
+	CommitIndex      uint64            // Index of highest log entry to be committed
+	State            RaftState         // Leader, Candidate, Follower
+	LeaderID         string            // Default "" if not leader, node ID otherwise
+	VotesReceived    map[string]bool   // Set of node IDs that stores whether the node voted for the current candidate
+	NextIndex        map[string]uint64 // Follower's next log entry's index
+	MatchIndex       map[string]uint64 // Follower's index of the highest log entry to be replicated
+	ElectionTimeout  *time.Timer       // Timer for election timeouts
+	HeartbeatTimeout *time.Timer       // Timer for leader heartbeats
+}
+
+type NodeMap struct {
+	Nodes []Node
+}
 
 type RaftServer struct {
 	UnimplementedRaftServiceServer
-	mainNode *types.Node
+	mainNode *Node
 }
 
-func NewRaftServer(mainNode *types.Node) *RaftServer {
+func NewRaftServer(mainNode *Node) *RaftServer {
 	return &RaftServer{
 		mainNode: mainNode,
 	}
 }
+
+// NODE METHODS
+
+func (n *Node) SaveRaftState() error {
+	filePath := filepath.Join(n.DataDir, "raft_state.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		log.Printf("Error opening file: %v", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Error closing file: %v", err)
+		}
+	}()
+
+	encoder := gob.NewEncoder(file)
+
+	savedState := &RaftSavedState{
+		CurrentTerm: n.CurrentTerm,
+		VotedFor:    n.VotedFor,
+	}
+	if err := encoder.Encode(savedState); err != nil {
+		return fmt.Errorf("error saving raft state: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("error saving raft state: %v", err)
+	}
+	return nil
+}
+
+func (n *Node) LoadRaftState() error {
+	filePath := filepath.Join(n.DataDir, "raft_state.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("Raft state file not found for node %s", n.ID)
+			return nil
+		}
+		log.Printf("Error opening file: %v", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Error closing file: %v", err)
+		}
+	}()
+
+	decoder := gob.NewDecoder(file)
+	var savedState RaftSavedState
+	if err := decoder.Decode(&savedState); err != nil {
+		return fmt.Errorf("error decoding raft state: %v", err)
+	}
+	n.CurrentTerm = savedState.CurrentTerm
+	n.VotedFor = savedState.VotedFor
+	return nil
+}
+
+func (n *Node) AppendLogEntry(entry *LogEntry) error {
+	filePath := filepath.Join(n.DataDir, "raft_log.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("error opening file: %v", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Error closing file: %v", err)
+		}
+	}()
+
+	encoder := gob.NewEncoder(file)
+	if err := encoder.Encode(entry); err != nil {
+		return fmt.Errorf("error encoding raft log: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("error saving raft log: %v", err)
+	}
+	return nil
+}
+
+func (n *Node) AppendLogEntries(entries []*LogEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	filePath := filepath.Join(n.DataDir, "raft_log.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("error opening file: %v", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Error closing file: %v", err)
+		}
+	}()
+	encoder := gob.NewEncoder(file)
+
+	for _, entry := range entries {
+		if err := encoder.Encode(entry); err != nil {
+			return fmt.Errorf("error encoding raft log: %v", err)
+		}
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("error saving raft log: %v", err)
+	}
+	return nil
+}
+
+func (n *Node) LoadRaftLog() error {
+	filePath := filepath.Join(n.DataDir, "raft_log.gob")
+	fmt.Printf("%s", filePath)
+	file, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("raft log file not found for node %s", n.ID)
+		}
+		return fmt.Errorf("error opening file: %v", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Error closing file: %v", err)
+		}
+	}()
+
+	decoder := gob.NewDecoder(file)
+	n.Log = make([]*LogEntry, 0)
+	for {
+		var entry LogEntry
+		err := decoder.Decode(&entry)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("error decoding log entry: %v", err)
+		}
+		n.Log = append(n.Log, &entry)
+	}
+	return nil
+}
+
+func (n *Node) Put(key string, value []byte) {
+	n.Mu.Lock()
+	defer n.Mu.Unlock()
+	n.Data[key] = value
+}
+
+func (n *Node) Get(key string) ([]byte, error) {
+	n.Mu.Lock()
+	defer n.Mu.Unlock()
+	val, ok := n.Data[key]
+	if !ok {
+		return nil, fmt.Errorf("404 - Key Not Found: %s", key)
+	}
+	return val, nil
+}
+
+// RAFT METHODS
 
 func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
 	s.mainNode.RaftMu.Lock()
@@ -27,7 +253,7 @@ func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (
 		if err != nil {
 			return nil, err
 		}
-		s.mainNode.State = types.Follower
+		s.mainNode.State = Follower
 	}
 	var lastLogTerm uint64 = 0
 	if len(s.mainNode.Log) > 0 {
@@ -59,7 +285,7 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 	if term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
-		s.mainNode.State = types.Follower
+		s.mainNode.State = Follower
 		s.mainNode.LeaderID = ""
 		if err := s.mainNode.SaveRaftState(); err != nil {
 			log.Fatalf("error saving raft state: %v", err)
@@ -84,7 +310,7 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 		if err != nil {
 			return nil, err
 		}
-		s.mainNode.State = types.Follower
+		s.mainNode.State = Follower
 	}
 
 	// 1. Reply false if term < currentTerm (§5.1)
@@ -102,14 +328,6 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 		return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
 	}
 
-	if uint64(len(req.Entries)) > 0 && uint64(len(s.mainNode.Log)) > req.GetPrevLogIndex() {
-		// Check for a term mismatch at the index, and if so, truncate
-		index := min(uint64(len(req.Entries))+req.GetPrevLogIndex(), uint64(len(s.mainNode.Log))) - 1
-		if s.mainNode.Log[index].Term != req.Entries[index-req.PrevLogIndex].Term {
-			s.mainNode.Log = s.mainNode.Log[:req.PrevLogIndex-1]
-		}
-	}
-
 	originalLength := len(s.mainNode.Log)
 	// Find and truncate if a potential conflicting entry is found, otherwise append all entries
 	for i, entry := range req.Entries {
@@ -124,10 +342,13 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 			s.mainNode.Log = append(s.mainNode.Log, entry)
 		}
 	}
-	err := s.mainNode.AppendLogEntries(s.mainNode.Log[originalLength-1:])
-	if err != nil {
-		log.Printf("AppendLogEntries failed: %v", err)
-		return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
+
+	newEntries := s.mainNode.Log[originalLength:]
+	if len(newEntries) > 0 {
+		err := s.mainNode.AppendLogEntries(newEntries)
+		if err != nil {
+			return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
+		}
 	}
 
 	if req.LeaderCommit > s.mainNode.CommitIndex {
@@ -137,5 +358,10 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 		}
 		s.mainNode.CommitIndex = min(req.LeaderCommit, lastEntryIndex)
 	}
+	err := s.mainNode.LoadRaftLog()
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("%+v\n", s.mainNode.Log)
 	return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
 }
