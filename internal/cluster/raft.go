@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -68,10 +69,26 @@ type Node struct {
 	MatchIndex       map[string]uint64 // Follower's index of the highest log entry to be replicated
 	ElectionTimeout  *time.Timer       // Timer for election timeouts
 	HeartbeatTimeout *time.Timer       // Timer for leader heartbeats
+
+	AppendEntriesChan       chan *AppendEntriesRequestWrapper
+	RequestVoteChan         chan *RequestVoteRequestWrapper
+	RequestVoteResponseChan chan *RequestVoteResponse
 }
 
 type NodeMap struct {
-	Nodes []Node
+	Nodes []*Node
+}
+
+type AppendEntriesRequestWrapper struct {
+	Ctx      context.Context
+	Request  *AppendEntriesRequest
+	Response chan *AppendEntriesResponse
+}
+
+type RequestVoteRequestWrapper struct {
+	Ctx      context.Context
+	Request  *RequestVoteRequest
+	Response chan *RequestVoteResponse
 }
 
 type RaftServer struct {
@@ -85,7 +102,7 @@ func NewRaftServer(mainNode *Node) *RaftServer {
 	}
 }
 
-// NODE METHODS
+// State Persistence
 
 func (n *Node) SaveRaftState() error {
 	filePath := filepath.Join(n.DataDir, "raft_state.gob")
@@ -241,11 +258,25 @@ func (n *Node) Get(key string) ([]byte, error) {
 	return val, nil
 }
 
-// RAFT METHODS
+// Raft
+
+func (n *Node) ResetElectionTimeout() {
+	durationMs := rand.Intn(maxElectionTimeoutMs-minElectionTimeoutMs+1) + minElectionTimeoutMs
+	timeout := time.Duration(durationMs) * time.Millisecond
+
+	if n.ElectionTimeout != nil {
+		n.ElectionTimeout.Stop()
+	}
+	n.ElectionTimeout = time.NewTimer(timeout)
+	log.Printf("Node %s: Election timeout set to %dms", n.ID, durationMs)
+}
+
+func (n *Node) ResetHeartbeatTimeout() {
+	n.HeartbeatTimeout = time.NewTimer(50 * time.Millisecond)
+	log.Printf("Node %s: Heartbeat timeout set to %dms", n.ID, 50)
+}
 
 func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
-	s.mainNode.RaftMu.Lock()
-	defer s.mainNode.RaftMu.Unlock()
 	if req.Term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
@@ -279,8 +310,6 @@ func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (
 }
 
 func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
-	s.mainNode.RaftMu.Lock()
-	defer s.mainNode.RaftMu.Unlock()
 	term, voteGranted, voterId := req.Term, req.VoteGranted, req.VoterId
 	if term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
@@ -300,9 +329,6 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 }
 
 func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
-	s.mainNode.RaftMu.Lock()
-	defer s.mainNode.RaftMu.Unlock()
-
 	if req.Term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
@@ -364,4 +390,30 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 	}
 	fmt.Printf("%+v\n", s.mainNode.Log)
 	return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
+}
+
+func (s *RaftServer) AppendEntriesHandler(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+	respChan := make(chan *AppendEntriesResponse, 1)
+	wrapper := &AppendEntriesRequestWrapper{
+		Ctx:      ctx,
+		Request:  req,
+		Response: respChan,
+	}
+	s.mainNode.AppendEntriesChan <- wrapper
+
+	resp := <-respChan
+	return resp, nil
+}
+
+func (s *RaftServer) RequestVoteHandler(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
+	respChan := make(chan *RequestVoteResponse, 1)
+	wrapper := &RequestVoteRequestWrapper{
+		Ctx:      ctx,
+		Request:  req,
+		Response: respChan,
+	}
+	s.mainNode.RequestVoteChan <- wrapper
+
+	resp := <-respChan
+	return resp, nil
 }
