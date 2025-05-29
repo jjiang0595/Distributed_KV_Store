@@ -71,6 +71,7 @@ type Node struct {
 	HeartbeatTimeout *time.Timer       // Timer for leader heartbeats
 
 	AppendEntriesChan       chan *AppendEntriesRequestWrapper
+	ClientCommandChan       chan *Command
 	RequestVoteChan         chan *RequestVoteRequestWrapper
 	RequestVoteResponseChan chan *RequestVoteResponse
 }
@@ -159,7 +160,7 @@ func (n *Node) LoadRaftState() error {
 	return nil
 }
 
-func (n *Node) AppendLogEntry(entry *LogEntry) error {
+func (n *Node) SaveLogEntry(entry *LogEntry) error {
 	filePath := filepath.Join(n.DataDir, "raft_log.gob")
 	fmt.Printf("%s", filePath)
 	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
@@ -182,7 +183,7 @@ func (n *Node) AppendLogEntry(entry *LogEntry) error {
 	return nil
 }
 
-func (n *Node) AppendLogEntries(entries []*LogEntry) error {
+func (n *Node) SaveLogEntries(entries []*LogEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -371,7 +372,7 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 
 	newEntries := s.mainNode.Log[originalLength:]
 	if len(newEntries) > 0 {
-		err := s.mainNode.AppendLogEntries(newEntries)
+		err := s.mainNode.SaveLogEntries(newEntries)
 		if err != nil {
 			return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
 		}
