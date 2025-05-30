@@ -58,6 +58,7 @@ type Node struct {
 	// Raft
 	RaftMu sync.Mutex
 
+	Peers            map[string]*Node
 	CurrentTerm      uint64            // Latest term server
 	VotedFor         string            // Candidate ID that the node voted for
 	Log              []*LogEntry       // Replicated messages log
@@ -70,10 +71,11 @@ type Node struct {
 	ElectionTimeout  *time.Timer       // Timer for election timeouts
 	HeartbeatTimeout *time.Timer       // Timer for leader heartbeats
 
-	AppendEntriesChan       chan *AppendEntriesRequestWrapper
-	ClientCommandChan       chan *Command
-	RequestVoteChan         chan *RequestVoteRequestWrapper
-	RequestVoteResponseChan chan *RequestVoteResponse
+	AppendEntriesChan         chan *AppendEntriesRequestWrapper
+	AppendEntriesResponseChan chan *AppendEntriesResponseWrapper
+	ClientCommandChan         chan *Command
+	RequestVoteChan           chan *RequestVoteRequestWrapper
+	RequestVoteResponseChan   chan *RequestVoteResponse
 }
 
 type NodeMap struct {
@@ -84,6 +86,12 @@ type AppendEntriesRequestWrapper struct {
 	Ctx      context.Context
 	Request  *AppendEntriesRequest
 	Response chan *AppendEntriesResponse
+}
+
+type AppendEntriesResponseWrapper struct {
+	Response *AppendEntriesResponse
+	Error    error
+	PeerID   string
 }
 
 type RequestVoteRequestWrapper struct {
