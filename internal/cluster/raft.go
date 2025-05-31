@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -59,11 +60,12 @@ type Node struct {
 	RaftMu sync.Mutex
 
 	Peers            map[string]*Node
-	CurrentTerm      uint64            // Latest term server
-	VotedFor         string            // Candidate ID that the node voted for
-	Log              []*LogEntry       // Replicated messages log
-	CommitIndex      uint64            // Index of highest log entry to be committed
-	State            RaftState         // Leader, Candidate, Follower
+	CurrentTerm      uint64      // Latest term server
+	VotedFor         string      // Candidate ID that the node voted for
+	Log              []*LogEntry // Replicated messages log
+	CommitIndex      uint64      // Index of highest log entry to be committed
+	State            RaftState   // Leader, Candidate, Follower
+	LastApplied      uint64
 	LeaderID         string            // Default "" if not leader, node ID otherwise
 	VotesReceived    map[string]bool   // Set of node IDs that stores whether the node voted for the current candidate
 	NextIndex        map[string]uint64 // Follower's next log entry's index
@@ -89,9 +91,11 @@ type AppendEntriesRequestWrapper struct {
 }
 
 type AppendEntriesResponseWrapper struct {
-	Response *AppendEntriesResponse
-	Error    error
-	PeerID   string
+	Response     *AppendEntriesResponse
+	Error        error
+	PeerID       string
+	PrevLogIndex uint64
+	SentEntries  []*LogEntry
 }
 
 type RequestVoteRequestWrapper struct {
@@ -112,6 +116,25 @@ func NewRaftServer(mainNode *Node) *RaftServer {
 }
 
 // State Persistence
+
+func (n *Node) ApplyCommittedEntries() {
+	n.Mu.Lock()
+	defer n.Mu.Unlock()
+
+	for n.LastApplied < n.CommitIndex {
+		n.LastApplied++
+		entry := n.Log[n.LastApplied-1]
+
+		var cmd Command
+		err := json.Unmarshal(entry.Command, &cmd)
+		if err != nil {
+			log.Fatalf("Error unmarshalling command: %v", err)
+		}
+
+		n.Data[cmd.Key] = cmd.Value
+		log.Printf("Node %s: PUT %s -> %s", n.ID, cmd.Key, string(cmd.Value))
+	}
+}
 
 func (n *Node) SaveRaftState() error {
 	filePath := filepath.Join(n.DataDir, "raft_state.gob")
