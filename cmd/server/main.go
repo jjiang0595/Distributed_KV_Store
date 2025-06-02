@@ -308,6 +308,64 @@ func main() {
 		}
 	}()
 
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			key := r.URL.Path[1:]
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer r.Body.Close()
+
+			node.RaftMu.Lock()
+			leaderId := node.LeaderID
+			node.RaftMu.Unlock()
+			switch node.State {
+			case cluster.Leader:
+				putCmd := &cluster.Command{
+					Type:  cluster.CommandPut,
+					Key:   key,
+					Value: body,
+				}
+
+				node.ClientCommandChan <- putCmd
+				w.WriteHeader(http.StatusCreated)
+				_, err := fmt.Fprintf(w, "Sent a PUT request for %s", key)
+				if err != nil {
+					log.Printf("Error writing response: %v", err)
+				}
+				return
+			default:
+				if leaderId == "" {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				http.Redirect(w, r, fmt.Sprintf("%s:%v", node.Peers[leaderId].Address, node.Peers[leaderId].Port), http.StatusTemporaryRedirect)
+				return
+			}
+
+		} else if r.Method == http.MethodGet {
+			key := r.URL.Path[1:]
+
+			node.Mu.Lock()
+			defer node.Mu.Unlock()
+			if _, ok := node.Data[key]; !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_, err := fmt.Fprintf(w, "Key %s not found", key)
+				if err != nil {
+					return
+				}
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write(node.Data[key])
+			if err != nil {
+				fmt.Printf("Error writing response: %v", err)
+				return
+			}
+		}
+	})
 	fmt.Printf("Listening on port %d\n", node.Port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", node.Port), nil))
 }
