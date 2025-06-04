@@ -57,17 +57,17 @@ type Node struct {
 	RaftMu sync.Mutex
 
 	Peers           map[string]*Node
-	CurrentTerm     uint64      // Latest term server
-	VotedFor        string      // Candidate ID that the node voted for
-	Log             []*LogEntry // Replicated messages log
-	CommitIndex     uint64      // Index of highest log entry to be committed
-	State           RaftState   // Leader, Candidate, Follower
-	LastApplied     uint64
-	LeaderID        string            // Default "" if not leader, node ID otherwise
-	VotesReceived   map[string]bool   // Set of node IDs that stores whether the node voted for the current candidate
-	NextIndex       map[string]uint64 // Follower's next log entry's index
-	MatchIndex      map[string]uint64 // Follower's index of the highest log entry to be replicated
-	ElectionTimeout *time.Timer       // Timer for election timeouts
+	CurrentTerm     uint64            // Latest term server
+	VotedFor        string            // Candidate ID that the node voted for
+	Log             []*LogEntry       // Replicated messages log
+	CommitIndex     uint64            // Index of highest entry that was known to be committed
+	State           RaftState         // Leader, Candidate, Follower
+	LastApplied     uint64            // Highest index that was applied to state machine (data)
+	LeaderID        string            // Current leader's ID, default ""
+	VotesReceived   map[string]bool   // Set of node IDs that the candidate has received votes from
+	NextIndex       map[string]uint64 // (Leader) The next index that the leader will send to a follower
+	MatchIndex      map[string]uint64 // (Leader) The index that the leader has already replicated its logs up to
+	ElectionTimeout *time.Timer       // Election timer that triggers if no gRPC response is heard from leader
 
 	AppendEntriesChan         chan *AppendEntriesRequestWrapper
 	AppendEntriesResponseChan chan *AppendEntriesResponseWrapper
@@ -273,6 +273,7 @@ func (n *Node) LoadRaftLog() error {
 	return nil
 }
 
+// Raft
 
 func (n *Node) RunRaftLoop() {
 	grpcServer := grpc.NewServer()
