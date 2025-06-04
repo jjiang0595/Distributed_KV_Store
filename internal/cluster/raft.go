@@ -25,11 +25,6 @@ const (
 	Leader    RaftState = "leader"
 )
 
-const (
-	CommandPut CommandType = "put"
-	CommandGet CommandType = "get"
-	CommandDel CommandType = "del"
-)
 
 const (
 	minElectionTimeoutMs = 150
@@ -142,7 +137,6 @@ func (n *Node) ApplyCommittedEntries() {
 
 func (n *Node) SaveRaftState() error {
 	filePath := filepath.Join(n.DataDir, "raft_state.gob")
-	fmt.Printf("%s", filePath)
 	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		log.Printf("Error opening file: %v", err)
@@ -278,18 +272,7 @@ func (n *Node) LoadRaftLog() error {
 	return nil
 }
 
-func (n *Node) Put(key string, value []byte) {
-	n.Mu.Lock()
-	defer n.Mu.Unlock()
-	n.Data[key] = value
-}
 
-func (n *Node) Get(key string) ([]byte, error) {
-	n.Mu.Lock()
-	defer n.Mu.Unlock()
-	val, ok := n.Data[key]
-	if !ok {
-		return nil, fmt.Errorf("404 - Key Not Found: %s", key)
 func (n *Node) RunRaftLoop() {
 	grpcServer := grpc.NewServer()
 	raftServer := NewRaftServer(n)
