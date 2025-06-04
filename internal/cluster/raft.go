@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -25,6 +26,7 @@ const (
 	Leader    RaftState = "leader"
 )
 
+const CommandPut CommandType = "put"
 
 const (
 	minElectionTimeoutMs = 150
@@ -653,7 +655,9 @@ func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (
 	if req.Term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
+		s.mainNode.VotesReceived = make(map[string]bool)
 		s.mainNode.State = Follower
+		s.mainNode.ResetElectionTimeout()
 		if err := s.mainNode.SaveRaftState(); err != nil {
 			log.Fatalf("error saving raft state: %v", err)
 		}
@@ -714,6 +718,7 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 			log.Fatalf("error saving raft state: %v", err)
 		}
 		s.mainNode.State = Follower
+		s.mainNode.ResetElectionTimeout()
 	}
 	s.mainNode.LeaderID = req.LeaderId
 
