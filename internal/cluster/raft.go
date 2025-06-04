@@ -290,11 +290,223 @@ func (n *Node) Get(key string) ([]byte, error) {
 	val, ok := n.Data[key]
 	if !ok {
 		return nil, fmt.Errorf("404 - Key Not Found: %s", key)
+func (n *Node) RunRaftLoop() {
+	grpcServer := grpc.NewServer()
+	raftServer := NewRaftServer(n)
+	RegisterRaftServiceServer(grpcServer, raftServer)
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", n.GrpcPort))
+	if err != nil {
+		log.Fatalf("Error listening on port %d: %v", n.GrpcPort, err)
 	}
-	return val, nil
-}
 
-// Raft
+	go func() {
+		log.Printf("Listening on port %d", n.GrpcPort)
+		serveErr := grpcServer.Serve(listener)
+		n.ResetElectionTimeout()
+		if serveErr != nil {
+			log.Fatalf("Error serving on port %d: %v", n.GrpcPort, serveErr)
+		}
+	}()
+
+	n.ResetElectionTimeout()
+	for {
+		n.RaftMu.Lock()
+		currentState := n.State
+		n.RaftMu.Unlock()
+
+		switch currentState {
+		case Leader:
+			select {
+			case clientReq := <-n.ClientCommandChan:
+				n.RaftMu.Lock()
+				commandBytes, err := json.Marshal(clientReq)
+				if err != nil {
+					log.Printf("Error marshalling command to bytes: %v", err)
+					n.RaftMu.Unlock()
+					continue
+				}
+				entry := &LogEntry{
+					Term:    n.CurrentTerm,
+					Index:   uint64(len(n.Log)) + 1,
+					Command: commandBytes,
+				}
+				n.Log = append(n.Log, entry)
+
+				if err := n.SaveLogEntry(entry); err != nil {
+					log.Fatalf("Node %s: Error appending log entry: %v. Crashing n.", n.ID, err)
+				}
+			}
+
+		case Candidate:
+			select {
+			case <-n.ElectionTimeout.C:
+				n.RaftMu.Lock()
+				log.Printf("Candidate - Election timeout")
+
+				n.CurrentTerm += 1
+				n.VotedFor = n.ID
+				n.VotesReceived = make(map[string]bool)
+				n.VotesReceived[n.ID] = true
+				if err := n.SaveRaftState(); err != nil {
+					log.Fatalf("error saving raft state: %v", err)
+				}
+				n.RaftMu.Unlock()
+
+				n.ResetElectionTimeout()
+				for _, peer := range n.Peers {
+					if peer.ID == n.ID {
+						continue
+					}
+					go func(peer *Node) {
+						log.Printf("Candidate Election - Node %s sending to Node %s", n.ID, peer.ID)
+						conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", peer.Address, peer.GrpcPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
+						if err != nil {
+							log.Printf("Error connecting to peer %s:%d %v", peer.Address, peer.Port, err)
+							if conn != nil {
+								conn.Close()
+							}
+							return
+						}
+						defer func(conn *grpc.ClientConn) {
+							err := conn.Close()
+							if err != nil {
+								log.Printf("Error closing peer %s:%d %v", peer.Address, peer.Port, err)
+							}
+						}(conn)
+						peerClient := NewRaftServiceClient(conn)
+
+						ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+						defer cancel()
+						voteRequest := &RequestVoteRequest{
+							Term:        n.CurrentTerm,
+							CandidateId: n.ID,
+							LastLogIndex: func() uint64 {
+								if len(n.Log) == 0 {
+									return 0
+								}
+								return n.Log[len(n.Log)-1].Index
+							}(),
+							LastLogTerm: func() uint64 {
+								if len(n.Log) == 0 {
+									return 0
+								}
+								return n.Log[len(n.Log)-1].Term
+							}(),
+						}
+						response, err := peerClient.RequestVote(ctx, voteRequest)
+						if err != nil {
+							log.Printf("Error requesting vote: %v", err)
+							return
+						}
+						n.RequestVoteResponseChan <- response
+					}(peer)
+				}
+
+			case aeWrapper := <-n.AppendEntriesChan:
+				n.RaftMu.Lock()
+				ctx, cancel := context.WithTimeout(aeWrapper.Ctx, time.Millisecond*50)
+
+				response, err := raftServer.AppendEntries(ctx, aeWrapper.Request)
+				if err != nil {
+					log.Printf("Error appending entries: %v", err)
+					if response == nil {
+						response = &AppendEntriesResponse{Term: n.CurrentTerm, Success: false}
+					}
+				}
+				if n.CommitIndex > n.LastApplied {
+					n.ApplyCommittedEntries()
+				}
+				cancel()
+				n.RaftMu.Unlock()
+				aeWrapper.Response <- response
+
+			case reqVoteWrapper := <-n.RequestVoteChan:
+				ctx, cancel := context.WithTimeout(reqVoteWrapper.Ctx, 50*time.Millisecond)
+
+				response, err := raftServer.RequestVote(ctx, reqVoteWrapper.Request)
+				if err != nil {
+					log.Printf("Error requesting vote: %v", err)
+				}
+				cancel()
+				reqVoteWrapper.Response <- response
+
+			case reqVoteRespWrapper := <-n.RequestVoteResponseChan:
+				raftServer.ReceiveVote(reqVoteRespWrapper)
+
+				n.RaftMu.Lock()
+				votesReceivedLen, peersLen := len(n.VotesReceived), len(n.Peers)
+				n.RaftMu.Unlock()
+
+				if uint64(votesReceivedLen) > uint64(peersLen/2)+1 {
+					n.RaftMu.Lock()
+					n.State = Leader
+					n.LeaderID = n.ID
+					n.NextIndex = make(map[string]uint64)
+					n.MatchIndex = make(map[string]uint64)
+					for _, peer := range n.Peers {
+						if peer.ID == n.ID {
+							continue
+						}
+						n.NextIndex[peer.ID] = func() uint64 {
+							if len(n.Log) == 0 {
+								return 0
+							}
+							return n.Log[len(n.Log)-1].Index + 1
+						}()
+						n.MatchIndex[peer.ID] = 0
+					}
+					n.RaftMu.Unlock()
+					fmt.Printf("New Leader - %s", n.ID)
+					n.StartReplicators()
+				}
+			}
+
+		case Follower:
+			select {
+			case <-n.ElectionTimeout.C:
+				log.Printf("Follower - Election timeout")
+				n.RaftMu.Lock()
+				n.State = Candidate
+				n.CurrentTerm += 1
+				n.VotedFor = n.ID
+				n.VotesReceived = make(map[string]bool)
+				n.VotesReceived[n.ID] = true
+				n.RaftMu.Unlock()
+
+				n.ResetElectionTimeout()
+				if err := n.SaveRaftState(); err != nil {
+					log.Fatalf("error saving raft state: %v", err)
+				}
+
+			case aeReq := <-n.AppendEntriesChan:
+				ctx, cancel := context.WithTimeout(aeReq.Ctx, time.Millisecond*50)
+
+				response, err := raftServer.AppendEntries(ctx, aeReq.Request)
+				if err != nil {
+					log.Printf("Error appending entries: %v", err)
+					if response == nil {
+						response = &AppendEntriesResponse{Term: n.CurrentTerm, Success: false}
+					}
+				}
+				if n.CommitIndex > n.LastApplied {
+					n.ApplyCommittedEntries()
+				}
+				cancel()
+				aeReq.Response <- response
+
+			case reqVoteReq := <-n.RequestVoteChan:
+				ctx, cancel := context.WithTimeout(reqVoteReq.Ctx, 50*time.Millisecond)
+
+				response, err := raftServer.RequestVote(ctx, reqVoteReq.Request)
+				if err != nil {
+					log.Printf("Error requesting vote: %v", err)
+				}
+				cancel()
+				reqVoteReq.Response <- response
+			}
+		}
+	}
+}
 
 func (n *Node) StartReplicators() {
 	n.RaftMu.Lock()
