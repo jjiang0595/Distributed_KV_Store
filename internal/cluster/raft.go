@@ -648,6 +648,8 @@ func (n *Node) ResetElectionTimeout() {
 }
 
 func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
+	s.mainNode.RaftMu.Lock()
+	defer s.mainNode.RaftMu.Unlock()
 	if req.Term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
@@ -702,6 +704,8 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 }
 
 func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+	s.mainNode.RaftMu.Lock()
+	defer s.mainNode.RaftMu.Unlock()
 	if req.Term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
