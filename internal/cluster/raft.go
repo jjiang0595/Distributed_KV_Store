@@ -649,11 +649,10 @@ func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (
 	if req.Term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
-		err := s.mainNode.SaveRaftState()
-		if err != nil {
-			return nil, err
-		}
 		s.mainNode.State = Follower
+		if err := s.mainNode.SaveRaftState(); err != nil {
+			log.Fatalf("error saving raft state: %v", err)
+		}
 	}
 	var lastLogTerm uint64 = 0
 	if len(s.mainNode.Log) > 0 {
@@ -671,7 +670,7 @@ func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (
 		s.mainNode.VotedFor = req.CandidateId
 		err := s.mainNode.SaveRaftState()
 		if err != nil {
-			return nil, err
+			log.Fatalf("error saving raft state: %v", err)
 		}
 		return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: true, VoterId: req.CandidateId}, nil
 	}
@@ -703,7 +702,7 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 		s.mainNode.CurrentTerm = req.Term
 		err := s.mainNode.SaveRaftState()
 		if err != nil {
-			return nil, err
+			log.Fatalf("error saving raft state: %v", err)
 		}
 		s.mainNode.State = Follower
 	}
