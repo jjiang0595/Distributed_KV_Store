@@ -159,6 +159,7 @@ func (n *Node) SaveRaftState() error {
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("error saving raft state: %v", err)
 	}
+	log.Printf("Node %s: Saved to Raft State %s", n.ID, filePath)
 	return nil
 }
 
@@ -168,7 +169,7 @@ func (n *Node) LoadRaftState() error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("Raft state file not found for node %s", n.ID)
+			log.Printf("Raft state file not found for n %s", n.ID)
 			return nil
 		}
 		log.Printf("Error opening file: %v", err)
@@ -246,7 +247,7 @@ func (n *Node) LoadRaftLog() error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("raft log file not found for node %s", n.ID)
+			return fmt.Errorf("raft log file not found for n %s", n.ID)
 		}
 		return fmt.Errorf("error opening file: %v", err)
 	}
@@ -542,7 +543,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 	for {
 		select {
 		case <-stopCtx.Done():
-			log.Printf("Node %s: ReplicateToFollower stopped", n.ID)
+			log.Printf("Leader %s: ReplicateToFollower stopped", n.ID)
 			return
 		default:
 			n.RaftMu.Lock()
@@ -614,7 +615,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 
 			sleepDuration := 10 * time.Millisecond
 			if response.Success {
-				log.Printf("Node %s: Successfully replicated", n.ID)
+				log.Printf("Leader %s: Successfully replicated to nodes", n.ID)
 				sleepDuration = 50 * time.Millisecond
 				if n.NextIndex[followerID] > 0 {
 					n.MatchIndex[followerID] = prevLogIndex + uint64(len(entries))
@@ -628,7 +629,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			}
 			n.RaftMu.Unlock()
 
-			log.Printf("ReplicateToFollower: Node %s is sleeping for %v", n.ID, sleepDuration)
+			log.Printf("Leader %s: Sleep %v", n.ID, sleepDuration)
 			time.Sleep(sleepDuration)
 		}
 	}
