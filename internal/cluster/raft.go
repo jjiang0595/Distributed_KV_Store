@@ -674,27 +674,30 @@ func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (
 		if err != nil {
 			log.Fatalf("error saving raft state: %v", err)
 		}
-		return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: true, VoterId: req.CandidateId}, nil
+		return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: true, VoterId: s.mainNode.ID}, nil
 	}
-	return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: false, VoterId: req.CandidateId}, nil
+	return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: false, VoterId: s.mainNode.ID}, nil
 }
 
 func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
-	term, voteGranted, voterId := req.Term, req.VoteGranted, req.VoterId
-	if term > s.mainNode.CurrentTerm {
+	s.mainNode.RaftMu.Lock()
+	defer s.mainNode.RaftMu.Unlock()
+	candidateTerm, voterTerm, voteGranted := s.mainNode.CurrentTerm, req.Term, req.VoteGranted
+
+	if voterTerm > candidateTerm {
 		s.mainNode.VotedFor = ""
-		s.mainNode.CurrentTerm = req.Term
+		s.mainNode.CurrentTerm = voterTerm
 		s.mainNode.State = Follower
-		s.mainNode.LeaderID = ""
+		s.mainNode.VotesReceived = make(map[string]bool)
 		if err := s.mainNode.SaveRaftState(); err != nil {
 			log.Fatalf("error saving raft state: %v", err)
 		}
 		return
 	}
 
-	if term == s.mainNode.CurrentTerm && voteGranted {
-		s.mainNode.VotesReceived[voterId] = true
-		log.Printf("Received vote from follower %s to leader %s", voterId, s.mainNode.LeaderID)
+	if candidateTerm == voterTerm && voteGranted {
+		s.mainNode.VotesReceived[req.VoterId] = true
+		log.Printf("Node %s: Received vote from %s. Total of %v votes", s.mainNode.ID, req.VoterId, len(s.mainNode.VotesReceived))
 	}
 }
 
@@ -708,7 +711,7 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 		}
 		s.mainNode.State = Follower
 	}
-	s.mainNode.LeaderID = req.GetLeaderId()
+	s.mainNode.LeaderID = req.LeaderId
 
 	// 1. Reply false if term < currentTerm (§5.1)
 	if req.Term < s.mainNode.CurrentTerm {
