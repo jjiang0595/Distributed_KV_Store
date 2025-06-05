@@ -7,40 +7,60 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 )
 
 func main() {
 	serverAddress := flag.String("server", "http://127.0.0.1:8080", "Server address")
+	method := flag.String("method", "PUT", "HTTP method")
 	key := flag.String("key", "", "Key")
+	value := flag.String("value", "", "Value")
 	flag.Parse()
-	message := []byte("HELLO")
 
-	url := fmt.Sprintf("%s/%s", *serverAddress, *key)
-	putReq, err := http.NewRequest(http.MethodPut, url, bytes.NewBuffer(message))
-	if err != nil {
-		log.Fatalf("Error creating request: %v", err)
+	if key == nil {
+		log.Fatalf("Key is empty")
 	}
-	getReq, err := http.NewRequest(http.MethodGet, url, nil)
+
+	var reqBody io.Reader
+	var url string
+	var httpMethod = strings.ToUpper(*method)
+
+	switch httpMethod {
+	case http.MethodPut:
+		if *value == "" {
+			log.Fatalf("Value is empty")
+		}
+		url = fmt.Sprintf("%s/%s", *serverAddress, *key)
+		reqBody = bytes.NewBufferString(*value)
+		log.Printf("Setup PUT Request: %s", reqBody)
+	case http.MethodGet:
+		url = fmt.Sprintf("%s/%s", *serverAddress, *key)
+		log.Printf("Setup GET Request: %s", reqBody)
+	default:
+		log.Fatalf("Unknown HTTP method: %s", httpMethod)
+	}
+
+	req, err := http.NewRequest(httpMethod, url, reqBody)
 	if err != nil {
-		log.Fatalf("Error creating request: %v", err)
+		log.Fatalf("NewRequest Error: %s", err)
 	}
 
 	client := &http.Client{}
-	resp, err := client.Do(putReq)
+	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatalf("Error sending request: %v", err)
+		log.Fatalf("Error sending request: %s", err)
 	}
-	resp, err = client.Do(getReq)
-	if err != nil {
-		log.Fatalf("Error sending request: %v", err)
-	}
+
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatalf("Error reading response body: %v", err)
+		log.Fatalf("Error reading response body: %s", err)
 	}
-	fmt.Println("GET Response Body: ", string(body))
 
-	fmt.Println("Response Status: ", resp.Status)
+	fmt.Println("Response Body: ", string(body))
+
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		fmt.Println("Redirected")
+	}
 }
