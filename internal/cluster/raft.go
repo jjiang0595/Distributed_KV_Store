@@ -392,8 +392,7 @@ func (n *Node) RunRaftLoop() {
 			case aeWrapper := <-n.AppendEntriesChan:
 				n.RaftMu.Lock()
 				ctx, cancel := context.WithTimeout(aeWrapper.Ctx, time.Millisecond*50)
-
-				response, err := raftServer.AppendEntries(ctx, aeWrapper.Request)
+				response, err := raftServer.ProcessAppendEntriesRequest(aeWrapper.Ctx, aeWrapper.Request)
 				if err != nil {
 					log.Printf("Error appending entries: %v", err)
 					if response == nil {
@@ -410,7 +409,7 @@ func (n *Node) RunRaftLoop() {
 			case reqVoteWrapper := <-n.RequestVoteChan:
 				ctx, cancel := context.WithTimeout(reqVoteWrapper.Ctx, 50*time.Millisecond)
 
-				response, err := raftServer.RequestVote(ctx, reqVoteWrapper.Request)
+				response, err := raftServer.ProcessVoteRequest(ctx, reqVoteWrapper.Request)
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
 				}
@@ -468,7 +467,7 @@ func (n *Node) RunRaftLoop() {
 			case aeReq := <-n.AppendEntriesChan:
 				ctx, cancel := context.WithTimeout(aeReq.Ctx, time.Millisecond*50)
 
-				response, err := raftServer.AppendEntries(ctx, aeReq.Request)
+				response, err := raftServer.ProcessAppendEntriesRequest(aeReq.Ctx, aeReq.Request)
 				if err != nil {
 					log.Printf("Error appending entries: %v", err)
 					if response == nil {
@@ -485,7 +484,7 @@ func (n *Node) RunRaftLoop() {
 				fmt.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
 				ctx, cancel := context.WithTimeout(reqVoteReq.Ctx, 50*time.Millisecond)
 
-				response, err := raftServer.RequestVote(ctx, reqVoteReq.Request)
+				response, err := raftServer.ProcessVoteRequest(ctx, reqVoteReq.Request)
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
 				}
@@ -652,7 +651,7 @@ func (n *Node) ResetElectionTimeout() {
 	log.Printf("Node %s: Election timeout set to %dms", n.ID, durationMs)
 }
 
-func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
+func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
 	if req.Term > s.mainNode.CurrentTerm {
@@ -711,7 +710,7 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 	}
 }
 
-func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
 	if req.Term > s.mainNode.CurrentTerm {
@@ -779,7 +778,7 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 	return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
 }
 
-func (s *RaftServer) AppendEntriesHandler(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	respChan := make(chan *AppendEntriesResponse, 1)
 	wrapper := &AppendEntriesRequestWrapper{
 		Ctx:      ctx,
@@ -792,7 +791,7 @@ func (s *RaftServer) AppendEntriesHandler(ctx context.Context, req *AppendEntrie
 	return resp, nil
 }
 
-func (s *RaftServer) RequestVoteHandler(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
+func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
 	respChan := make(chan *RequestVoteResponse, 1)
 	wrapper := &RequestVoteRequestWrapper{
 		Ctx:      ctx,
