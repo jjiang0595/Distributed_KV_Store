@@ -304,13 +304,12 @@ func (n *Node) RunRaftLoop() {
 		case Leader:
 			select {
 			case clientReq := <-n.ClientCommandChan:
-				n.RaftMu.Lock()
 				commandBytes, err := json.Marshal(clientReq)
 				if err != nil {
 					log.Printf("Error marshalling command to bytes: %v", err)
-					n.RaftMu.Unlock()
 					continue
 				}
+				n.RaftMu.Lock()
 				entry := &LogEntry{
 					Term:    n.CurrentTerm,
 					Index:   uint64(len(n.Log)) + 1,
@@ -321,6 +320,7 @@ func (n *Node) RunRaftLoop() {
 				if err := n.SaveLogEntry(entry); err != nil {
 					log.Fatalf("Node %s: Error appending log entry: %v. Crashing n.", n.ID, err)
 				}
+				n.RaftMu.Unlock()
 				log.Printf("Node %s: Successfully appended log entry", n.ID)
 			}
 
