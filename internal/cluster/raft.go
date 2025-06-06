@@ -121,7 +121,6 @@ func NewRaftServer(mainNode *Node) *RaftServer {
 func (n *Node) ApplyCommittedEntries() {
 	n.Mu.Lock()
 	defer n.Mu.Unlock()
-
 	for n.LastApplied < n.CommitIndex {
 		n.LastApplied++
 		entry := n.Log[n.LastApplied-1]
@@ -194,7 +193,7 @@ func (n *Node) LoadRaftState() error {
 
 func (n *Node) SaveLogEntry(entry *LogEntry) error {
 	filePath := filepath.Join(n.DataDir, "raft_log.gob")
-	fmt.Printf("%s", filePath)
+	log.Printf("Saved log entry to %s", filePath)
 	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		return fmt.Errorf("error opening file: %v", err)
@@ -212,6 +211,7 @@ func (n *Node) SaveLogEntry(entry *LogEntry) error {
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("error saving raft log: %v", err)
 	}
+	log.Printf("Exited safely from %s", filePath)
 	return nil
 }
 
@@ -220,7 +220,7 @@ func (n *Node) SaveLogEntries(entries []*LogEntry) error {
 		return nil
 	}
 	filePath := filepath.Join(n.DataDir, "raft_log.gob")
-	fmt.Printf("%s", filePath)
+	fmt.Printf("Saved log entries to %s", filePath)
 	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		return fmt.Errorf("error opening file: %v", err)
@@ -240,12 +240,12 @@ func (n *Node) SaveLogEntries(entries []*LogEntry) error {
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("error saving raft log: %v", err)
 	}
+	fmt.Printf("Exited safely from %s", filePath)
 	return nil
 }
 
 func (n *Node) LoadRaftLog() error {
 	filePath := filepath.Join(n.DataDir, "raft_log.gob")
-	fmt.Printf("%s", filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -283,15 +283,14 @@ func (n *Node) RunRaftLoop() {
 	RegisterRaftServiceServer(grpcServer, raftServer)
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", n.GrpcPort))
 	if err != nil {
-		log.Fatalf("Error listening on port %d: %v", n.GrpcPort, err)
+		log.Fatalf("Error listening on gRPC port %d: %v", n.GrpcPort, err)
 	}
 
 	go func() {
-		log.Printf("Listening on port %d", n.GrpcPort)
+		log.Printf("Listening on gRPC port %d", n.GrpcPort)
 		serveErr := grpcServer.Serve(listener)
-		n.ResetElectionTimeout()
 		if serveErr != nil {
-			log.Fatalf("Error serving on port %d: %v", n.GrpcPort, serveErr)
+			log.Fatalf("Error serving on gRPC port %d: %v", n.GrpcPort, serveErr)
 		}
 	}()
 
@@ -322,6 +321,7 @@ func (n *Node) RunRaftLoop() {
 				if err := n.SaveLogEntry(entry); err != nil {
 					log.Fatalf("Node %s: Error appending log entry: %v. Crashing n.", n.ID, err)
 				}
+				log.Printf("Node %s: Successfully appended log entry", n.ID)
 			}
 
 		case Candidate:
@@ -443,7 +443,7 @@ func (n *Node) RunRaftLoop() {
 						n.MatchIndex[peer.ID] = 0
 					}
 					n.RaftMu.Unlock()
-					fmt.Printf("New Leader - %s", n.ID)
+					log.Printf("New Leader - %s. VotesReceived %v", n.ID, n.VotesReceived)
 					n.StartReplicators()
 				}
 			}
@@ -482,6 +482,7 @@ func (n *Node) RunRaftLoop() {
 				aeReq.Response <- response
 
 			case reqVoteReq := <-n.RequestVoteChan:
+				fmt.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
 				ctx, cancel := context.WithTimeout(reqVoteReq.Ctx, 50*time.Millisecond)
 
 				response, err := raftServer.RequestVote(ctx, reqVoteReq.Request)
@@ -589,6 +590,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
 
+			log.Printf("Leader %s: ReplicateToFollower sending logs to %v", leaderID, followerID)
 			response, err := peerClient.AppendEntries(ctx, &AppendEntriesRequest{
 				Term:         term,
 				LeaderId:     leaderID,
@@ -630,6 +632,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 					n.NextIndex[followerID] -= 1
 				}
 			}
+			log.Printf("MatchIndex: %v, NextIndex: %v", n.MatchIndex[followerID], n.NextIndex[followerID])
 			n.RaftMu.Unlock()
 
 			log.Printf("Leader %s: Sleep %v", n.ID, sleepDuration)
@@ -704,6 +707,7 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 	if candidateTerm == voterTerm && voteGranted {
 		s.mainNode.VotesReceived[req.VoterId] = true
 		log.Printf("Node %s: Received vote from %s. Total of %v votes", s.mainNode.ID, req.VoterId, len(s.mainNode.VotesReceived))
+		log.Printf("Node %v", s.mainNode.VotesReceived)
 	}
 }
 
