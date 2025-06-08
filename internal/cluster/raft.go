@@ -33,9 +33,10 @@ const (
 	maxElectionTimeoutMs = 300
 )
 
-type RaftSavedState struct {
+type PersistentState struct {
 	CurrentTerm uint64
 	VotedFor    string
+	Log         []*LogEntry
 }
 
 type Command struct {
@@ -191,87 +192,6 @@ func (n *Node) LoadRaftState() error {
 	return nil
 }
 
-func (n *Node) SaveLogEntry(entry *LogEntry) error {
-	filePath := filepath.Join(n.DataDir, "raft_log.gob")
-	log.Printf("Saved log entry to %s", filePath)
-	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
-	if err != nil {
-		return fmt.Errorf("error opening file: %v", err)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			log.Printf("Error closing file: %v", err)
-		}
-	}()
-
-	encoder := gob.NewEncoder(file)
-	if err := encoder.Encode(entry); err != nil {
-		return fmt.Errorf("error encoding raft log: %v", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("error saving raft log: %v", err)
-	}
-	log.Printf("Exited safely from %s", filePath)
-	return nil
-}
-
-func (n *Node) SaveLogEntries(entries []*LogEntry) error {
-	if len(entries) == 0 {
-		return nil
-	}
-	filePath := filepath.Join(n.DataDir, "raft_log.gob")
-	fmt.Printf("Saved log entries to %s", filePath)
-	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
-	if err != nil {
-		return fmt.Errorf("error opening file: %v", err)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			log.Printf("Error closing file: %v", err)
-		}
-	}()
-	encoder := gob.NewEncoder(file)
-
-	for _, entry := range entries {
-		if err := encoder.Encode(entry); err != nil {
-			return fmt.Errorf("error encoding raft log: %v", err)
-		}
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("error saving raft log: %v", err)
-	}
-	fmt.Printf("Exited safely from %s", filePath)
-	return nil
-}
-
-func (n *Node) LoadRaftLog() error {
-	filePath := filepath.Join(n.DataDir, "raft_log.gob")
-	file, err := os.Open(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("raft log file not found for n %s", n.ID)
-		}
-		return fmt.Errorf("error opening file: %v", err)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			log.Printf("Error closing file: %v", err)
-		}
-	}()
-
-	decoder := gob.NewDecoder(file)
-	n.Log = make([]*LogEntry, 0)
-	for {
-		var entry LogEntry
-		err := decoder.Decode(&entry)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("error decoding log entry: %v", err)
-		}
-		n.Log = append(n.Log, &entry)
-	}
 	return nil
 }
 
@@ -317,9 +237,6 @@ func (n *Node) RunRaftLoop() {
 				}
 				n.Log = append(n.Log, entry)
 
-				if err := n.SaveLogEntry(entry); err != nil {
-					log.Fatalf("Node %s: Error appending log entry: %v. Crashing n.", n.ID, err)
-				}
 				n.RaftMu.Unlock()
 				log.Printf("Node %s: Successfully appended log entry", n.ID)
 			}
@@ -769,10 +686,6 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 			lastEntryIndex = s.mainNode.Log[len(s.mainNode.Log)-1].Index
 		}
 		s.mainNode.CommitIndex = min(req.LeaderCommit, lastEntryIndex)
-	}
-	err := s.mainNode.LoadRaftLog()
-	if err != nil {
-		return nil, err
 	}
 	fmt.Printf("%+v\n", s.mainNode.Log)
 	return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
