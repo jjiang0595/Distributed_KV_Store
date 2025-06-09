@@ -75,11 +75,18 @@ type Node struct {
 	AppendEntriesChan         chan *AppendEntriesRequestWrapper
 	AppendEntriesResponseChan chan *AppendEntriesResponseWrapper
 	ClientCommandChan         chan *Command
+	PersistStateChan          chan *PersistentState
 	RequestVoteChan           chan *RequestVoteRequestWrapper
 	RequestVoteResponseChan   chan *RequestVoteResponse
 
 	ReplicatorCtx    context.Context
 	ReplicatorCancel context.CancelFunc
+	ApplierCond *sync.Cond
+	// WaitGroups
+	ApplierWg    sync.WaitGroup
+	RaftLoopWg   sync.WaitGroup
+	PersistWg    sync.WaitGroup
+	ReplicatorWg sync.WaitGroup
 }
 
 type NodeMap struct {
@@ -119,50 +126,17 @@ func NewRaftServer(mainNode *Node) *RaftServer {
 
 // State Persistence
 
-func (n *Node) ApplyCommittedEntries() {
-	n.Mu.Lock()
-	defer n.Mu.Unlock()
-	for n.LastApplied < n.CommitIndex {
-		n.LastApplied++
-		entry := n.Log[n.LastApplied-1]
+func (n *Node) PersistRaftState() {
+	n.RaftMu.Lock()
+	defer n.RaftMu.Unlock()
 
-		var cmd Command
-		err := json.Unmarshal(entry.Command, &cmd)
-		if err != nil {
-			log.Fatalf("Error unmarshalling command: %v", err)
-		}
-
-		n.Data[cmd.Key] = cmd.Value
-		log.Printf("Node %s: PUT %s -> %s", n.ID, cmd.Key, string(cmd.Value))
-	}
-}
-
-func (n *Node) SaveRaftState() error {
-	filePath := filepath.Join(n.DataDir, "raft_state.gob")
-	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		log.Printf("Error opening file: %v", err)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			log.Printf("Error closing file: %v", err)
-		}
-	}()
-
-	encoder := gob.NewEncoder(file)
-
-	savedState := &RaftSavedState{
+	savedState := &PersistentState{
 		CurrentTerm: n.CurrentTerm,
 		VotedFor:    n.VotedFor,
+		Log:         n.Log,
 	}
-	if err := encoder.Encode(savedState); err != nil {
-		return fmt.Errorf("error saving raft state: %v", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("error saving raft state: %v", err)
-	}
-	log.Printf("Node %s: Saved to Raft State %s", n.ID, filePath)
-	return nil
+
+	n.PersistStateChan <- savedState
 }
 
 func (n *Node) LoadRaftState() error {
@@ -183,21 +157,20 @@ func (n *Node) LoadRaftState() error {
 	}()
 
 	decoder := gob.NewDecoder(file)
-	var savedState RaftSavedState
+	var savedState PersistentState
 	if err := decoder.Decode(&savedState); err != nil {
 		return fmt.Errorf("error decoding raft state: %v", err)
 	}
 	n.CurrentTerm = savedState.CurrentTerm
 	n.VotedFor = savedState.VotedFor
-	return nil
-}
-
+	n.Log = savedState.Log
 	return nil
 }
 
 // Raft
 
 func (n *Node) RunRaftLoop() {
+	defer n.RaftLoopWg.Done()
 	grpcServer := grpc.NewServer()
 	raftServer := NewRaftServer(n)
 	RegisterRaftServiceServer(grpcServer, raftServer)
@@ -237,6 +210,7 @@ func (n *Node) RunRaftLoop() {
 				}
 				n.Log = append(n.Log, entry)
 
+				go n.PersistRaftState()
 				n.RaftMu.Unlock()
 				log.Printf("Node %s: Successfully appended log entry", n.ID)
 			}
@@ -254,6 +228,7 @@ func (n *Node) RunRaftLoop() {
 				if err := n.SaveRaftState(); err != nil {
 					log.Fatalf("error saving raft state: %v", err)
 				}
+				go n.PersistRaftState()
 				n.RaftMu.Unlock()
 
 				n.ResetElectionTimeout()
@@ -318,6 +293,8 @@ func (n *Node) RunRaftLoop() {
 				}
 				if n.CommitIndex > n.LastApplied {
 					n.ApplyCommittedEntries()
+					n.ApplierWg.Add(1)
+					n.ApplierCond.Broadcast()
 				}
 				cancel()
 				n.RaftMu.Unlock()
@@ -380,6 +357,7 @@ func (n *Node) RunRaftLoop() {
 				if err := n.SaveRaftState(); err != nil {
 					log.Fatalf("error saving raft state: %v", err)
 				}
+				go n.PersistRaftState()
 
 			case aeReq := <-n.AppendEntriesChan:
 				ctx, cancel := context.WithTimeout(aeReq.Ctx, time.Millisecond*50)
@@ -393,6 +371,8 @@ func (n *Node) RunRaftLoop() {
 				}
 				if n.CommitIndex > n.LastApplied {
 					n.ApplyCommittedEntries()
+					n.ApplierWg.Add(1)
+					n.ApplierCond.Broadcast()
 				}
 				cancel()
 				aeReq.Response <- response
@@ -423,6 +403,7 @@ func (n *Node) StartReplicators() {
 	for _, peer := range n.Peers {
 		log.Printf("Leader %s: Starting replicator for peer %s", n.ID, peer.ID)
 		go n.ReplicateToFollower(n.ReplicatorCtx, peer.ID)
+		n.ReplicatorWg.Add(1)
 	}
 }
 
@@ -435,10 +416,31 @@ func (n *Node) StopReplicators() {
 		n.ReplicatorCtx = nil
 	} else {
 		log.Printf("Leader %s: No replicators to end", n.ID)
+func (n *Node) Shutdown() {
+	n.RaftMu.Lock()
+	n.StopReplicators()
+	n.Cancel()
+	n.RaftMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		n.ApplierWg.Wait()
+		n.PersistWg.Wait()
+		n.RaftLoopWg.Wait()
+		n.ReplicatorWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Printf("Node %s: All follower goroutines stopped fully", n.ID)
+	case <-time.After(150 * time.Millisecond):
+		log.Printf("Node %s: Timed out after 150ms. Some goroutines may still be running", n.ID)
 	}
 }
 
 func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
+	defer n.ReplicatorWg.Done()
 	peer, ok := n.Peers[followerID]
 	if !ok || peer == nil {
 		return
@@ -528,6 +530,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 				if err != nil {
 					log.Fatalf("Error saving raft state: %v", err)
 				}
+				go n.PersistRaftState()
 				n.StopReplicators()
 				n.ResetElectionTimeout()
 				n.RaftMu.Unlock()
@@ -557,6 +560,66 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 	}
 }
 
+func (n *Node) ApplierGoroutine() {
+	n.RaftMu.Lock()
+	for n.CommitIndex <= n.LastApplied {
+		n.ApplierCond.Wait()
+	}
+
+	for n.LastApplied < n.CommitIndex {
+		n.LastApplied++
+		entry := n.Log[n.LastApplied-1]
+
+		var cmd Command
+		err := json.Unmarshal(entry.Command, &cmd)
+		if err != nil {
+			log.Fatalf("Error unmarshalling command: %v", err)
+		}
+
+		n.Data[cmd.Key] = cmd.Value
+		n.ApplierWg.Done()
+		log.Printf("Node %s: PUT %s -> %s", n.ID, cmd.Key, string(cmd.Value))
+	}
+	n.RaftMu.Unlock()
+}
+
+func (n *Node) PersistStateGoroutine() {
+	for {
+		select {
+		case raftState, ok := <-n.PersistStateChan:
+			if !ok {
+				n.PersistWg.Done()
+				return
+			}
+			var buffer bytes.Buffer
+			encoder := gob.NewEncoder(&buffer)
+			if err := encoder.Encode(raftState); err != nil {
+				log.Fatalf("Error encoding saved state: %v", err)
+			}
+
+			filePath := filepath.Join(n.DataDir, "raft_state.gob")
+			tmpFilePath := filePath + ".tmp"
+
+			file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+			if err != nil {
+				log.Printf("Error opening file: %v", err)
+			}
+
+			if _, err := file.Write(buffer.Bytes()); err != nil {
+				log.Fatalf("error saving raft state: %v", err)
+			}
+			if err := file.Sync(); err != nil {
+				log.Fatalf("error saving raft state: %v", err)
+			}
+			file.Close()
+			if err := os.Rename(tmpFilePath, filePath); err != nil {
+				log.Fatalf("error renaming saved state: %v", err)
+			}
+			log.Printf("Node %s: Saved to Raft State %s", n.ID, filePath)
+		}
+	}
+}
+
 func (n *Node) ResetElectionTimeout() {
 	durationMs := rand.Intn(maxElectionTimeoutMs-minElectionTimeoutMs+1) + minElectionTimeoutMs
 	timeout := time.Duration(durationMs) * time.Millisecond
@@ -577,9 +640,7 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 		s.mainNode.VotesReceived = make(map[string]bool)
 		s.mainNode.State = Follower
 		s.mainNode.ResetElectionTimeout()
-		if err := s.mainNode.SaveRaftState(); err != nil {
-			log.Fatalf("error saving raft state: %v", err)
-		}
+		go s.mainNode.PersistRaftState()
 	}
 	var lastLogTerm uint64 = 0
 	if len(s.mainNode.Log) > 0 {
@@ -595,10 +656,7 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 
 	if req.Term == s.mainNode.CurrentTerm && logOk && (s.mainNode.VotedFor == req.CandidateId || s.mainNode.VotedFor == "") {
 		s.mainNode.VotedFor = req.CandidateId
-		err := s.mainNode.SaveRaftState()
-		if err != nil {
-			log.Fatalf("error saving raft state: %v", err)
-		}
+		go s.mainNode.PersistRaftState()
 		return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: true, VoterId: s.mainNode.ID}, nil
 	}
 	return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: false, VoterId: s.mainNode.ID}, nil
@@ -614,9 +672,7 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 		s.mainNode.CurrentTerm = voterTerm
 		s.mainNode.State = Follower
 		s.mainNode.VotesReceived = make(map[string]bool)
-		if err := s.mainNode.SaveRaftState(); err != nil {
-			log.Fatalf("error saving raft state: %v", err)
-		}
+		go s.mainNode.PersistRaftState()
 		return
 	}
 
@@ -633,12 +689,9 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 	if req.Term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
-		err := s.mainNode.SaveRaftState()
-		if err != nil {
-			log.Fatalf("error saving raft state: %v", err)
-		}
 		s.mainNode.State = Follower
 		s.mainNode.ResetElectionTimeout()
+		go s.mainNode.PersistRaftState()
 	}
 	s.mainNode.LeaderID = req.LeaderId
 
@@ -669,6 +722,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 				s.mainNode.Log = s.mainNode.Log[:leaderIndex-1]
 			}
 			s.mainNode.Log = append(s.mainNode.Log, entry)
+			go s.mainNode.PersistRaftState()
 		}
 	}
 
@@ -677,6 +731,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		err := s.mainNode.SaveLogEntries(newEntries)
 		if err != nil {
 			return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
+			go s.mainNode.PersistRaftState()
 		}
 	}
 

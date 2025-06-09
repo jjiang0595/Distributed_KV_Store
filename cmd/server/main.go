@@ -86,7 +86,8 @@ func main() {
 		ElectionTimeout:           nil,
 		AppendEntriesChan:         make(chan *cluster.AppendEntriesRequestWrapper),
 		AppendEntriesResponseChan: make(chan *cluster.AppendEntriesResponseWrapper),
-		ClientCommandChan:         make(chan *cluster.Command),
+		ClientCommandChan:         make(chan *cluster.Command, 1),
+		PersistStateChan:          make(chan *cluster.PersistentState, 1),
 		RequestVoteChan:           make(chan *cluster.RequestVoteRequestWrapper),
 		RequestVoteResponseChan:   make(chan *cluster.RequestVoteResponse),
 	}
@@ -109,6 +110,9 @@ func main() {
 			DataDir:  peer.DataDir,
 		}
 	}
+	node.PersistWg.Add(1)
+	node.RaftLoopWg.Add(1)
+	go node.PersistStateGoroutine()
 	go node.RunRaftLoop()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
