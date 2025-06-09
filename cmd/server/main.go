@@ -74,7 +74,6 @@ func main() {
 		Peers:                     make(map[string]*cluster.Node),
 		CurrentTerm:               0,
 		DataDir:                   cfg.Node.DataDir,
-		Mu:                        sync.Mutex{},
 		RaftMu:                    sync.Mutex{},
 		Log:                       make([]*cluster.LogEntry, 0),
 		CommitIndex:               0,
@@ -152,8 +151,8 @@ func main() {
 		} else if r.Method == http.MethodGet {
 			key := r.URL.Path[1:]
 
-			node.Mu.Lock()
-			defer node.Mu.Unlock()
+			node.RaftMu.Lock()
+			defer node.RaftMu.Unlock()
 			if _, ok := node.Data[key]; !ok {
 				w.WriteHeader(http.StatusNotFound)
 				_, err := fmt.Fprintf(w, "Key %s not found", key)
