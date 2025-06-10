@@ -308,23 +308,27 @@ func (n *Node) RunRaftLoop() {
 						}(conn)
 						peerClient := NewRaftServiceClient(conn)
 
-						ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-						defer cancel()
+						n.RaftMu.Lock()
+						currentTerm := n.CurrentTerm
+						lastLogIndex := func() uint64 {
+							if len(n.Log) == 0 {
+								return 0
+							}
+							return n.Log[len(n.Log)-1].Index
+						}()
+						lastLogTerm := func() uint64 {
+							if len(n.Log) == 0 {
+								return 0
+							}
+							return n.Log[len(n.Log)-1].Term
+						}()
+						n.RaftMu.Unlock()
+
 						voteRequest := &RequestVoteRequest{
-							Term:        n.CurrentTerm,
-							CandidateId: n.ID,
-							LastLogIndex: func() uint64 {
-								if len(n.Log) == 0 {
-									return 0
-								}
-								return n.Log[len(n.Log)-1].Index
-							}(),
-							LastLogTerm: func() uint64 {
-								if len(n.Log) == 0 {
-									return 0
-								}
-								return n.Log[len(n.Log)-1].Term
-							}(),
+							Term:         currentTerm,
+							CandidateId:  n.ID,
+							LastLogIndex: lastLogIndex,
+							LastLogTerm:  lastLogTerm,
 						}
 						response, err := peerClient.RequestVote(ctx, voteRequest)
 						if err != nil {
