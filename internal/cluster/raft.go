@@ -732,6 +732,12 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
+
+	// 1. Reply false if term < currentTerm (§5.1)
+	if req.Term < s.mainNode.CurrentTerm {
+		return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
+	}
+
 	if req.Term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
@@ -741,10 +747,6 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 	}
 	s.mainNode.LeaderID = req.LeaderId
 
-	// 1. Reply false if term < currentTerm (§5.1)
-	if req.Term < s.mainNode.CurrentTerm {
-		return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
-	}
 
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if req.PrevLogIndex > uint64(len(s.mainNode.Log)) {
