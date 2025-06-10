@@ -148,7 +148,7 @@ func main() {
 					w.WriteHeader(http.StatusServiceUnavailable)
 					return
 				}
-				http.Redirect(w, r, fmt.Sprintf("http://%s:%v", node.Peers[leaderId].Address, node.Peers[leaderId].Port), http.StatusTemporaryRedirect)
+				http.Redirect(w, r, fmt.Sprintf("http://%s:%v/%s", node.Peers[leaderId].Address, node.Peers[leaderId].Port, key), http.StatusTemporaryRedirect)
 				return
 			}
 
