@@ -135,7 +135,7 @@ func main() {
 					Key:   key,
 					Value: body,
 				}
-
+				log.Printf("Sending to ClientCommandChan %v...", node.ClientCommandChan)
 				node.ClientCommandChan <- putCmd
 				w.WriteHeader(http.StatusCreated)
 				_, err := fmt.Fprintf(w, "Sent a PUT request for %s", key)

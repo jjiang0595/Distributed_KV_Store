@@ -192,11 +192,13 @@ func (n *Node) RunRaftLoop() {
 		n.RaftMu.Lock()
 		currentState := n.State
 		n.RaftMu.Unlock()
-
+		log.Printf("Current data: %v", n.Data)
 		switch currentState {
 		case Leader:
+			log.Printf("------------------------Leader---------------------------------")
 			select {
 			case clientReq := <-n.ClientCommandChan:
+				log.Printf("Client Request Received: %v", clientReq)
 				commandBytes, err := json.Marshal(clientReq)
 				if err != nil {
 					log.Printf("Error marshalling command to bytes: %v", err)
@@ -214,8 +216,8 @@ func (n *Node) RunRaftLoop() {
 				n.RaftMu.Unlock()
 				log.Printf("Node %s: Successfully appended log entry", n.ID)
 			}
-
 		case Candidate:
+			log.Printf("------------------------Candidate---------------------------------")
 			select {
 			case <-n.ElectionTimeout.C:
 				n.RaftMu.Lock()
@@ -277,6 +279,7 @@ func (n *Node) RunRaftLoop() {
 							log.Printf("Error requesting vote: %v", err)
 							return
 						}
+						log.Printf("Vote Request Response: %v", response)
 						n.RequestVoteResponseChan <- response
 					}(peer)
 				}
@@ -399,6 +402,7 @@ func (n *Node) StartReplicators() {
 	}
 	n.ReplicatorCtx, n.ReplicatorCancel = context.WithCancel(context.Background())
 	n.RaftMu.Unlock()
+	log.Printf("Starting replicators...")
 
 	for _, peer := range n.Peers {
 		log.Printf("Leader %s: Starting replicator for peer %s", n.ID, peer.ID)
@@ -586,9 +590,11 @@ func (n *Node) ApplierGoroutine() {
 func (n *Node) PersistStateGoroutine() {
 	for {
 		select {
+			log.Printf("Leader %s: PersistStateGoroutine stopped through Ctx.Done()", n.ID)
 		case raftState, ok := <-n.PersistStateChan:
 			if !ok {
 				n.PersistWg.Done()
+				log.Printf("Leader %s: PersistStateGoroutine stopped through !ok", n.ID)
 				return
 			}
 			var buffer bytes.Buffer
@@ -743,6 +749,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		s.mainNode.CommitIndex = min(req.LeaderCommit, lastEntryIndex)
 	}
 	fmt.Printf("%+v\n", s.mainNode.Log)
+	log.Printf("Current Log: %v", s.mainNode.Log)
 	return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
 }
 

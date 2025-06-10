@@ -32,7 +32,7 @@ func main() {
 		}
 		url = fmt.Sprintf("%s/%s", *serverAddress, *key)
 		reqBody = bytes.NewBufferString(*value)
-		log.Printf("Setup PUT Request: %s", reqBody)
+		log.Printf("Setup PUT Request %s: %s ", *key, reqBody)
 	case http.MethodGet:
 		url = fmt.Sprintf("%s/%s", *serverAddress, *key)
 		log.Printf("Setup GET Request: %s", reqBody)
@@ -51,6 +51,7 @@ func main() {
 		log.Fatalf("Error sending request: %s", err)
 	}
 
+	log.Printf("Status Code: %d\n", resp.StatusCode)
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
