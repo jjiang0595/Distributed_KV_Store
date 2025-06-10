@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RaftService_RequestVote_FullMethodName   = "/cluster.RaftService/RequestVote"
+	RaftService_RequestVote_FullMethodName   = "/cluster.RaftService/ProcessVoteRequest"
 	RaftService_AppendEntries_FullMethodName = "/cluster.RaftService/AppendEntries"
 )
 
@@ -76,7 +76,7 @@ type RaftServiceServer interface {
 type UnimplementedRaftServiceServer struct{}
 
 func (UnimplementedRaftServiceServer) RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RequestVote not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method ProcessVoteRequest not implemented")
 }
 func (UnimplementedRaftServiceServer) AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AppendEntries not implemented")
@@ -146,7 +146,7 @@ var RaftService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*RaftServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "RequestVote",
+			MethodName: "ProcessVoteRequest",
 			Handler:    _RaftService_RequestVote_Handler,
 		},
 		{

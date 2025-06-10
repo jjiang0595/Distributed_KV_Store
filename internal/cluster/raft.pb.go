@@ -399,9 +399,9 @@ var file_cluster_raft_proto_goTypes = []any{
 }
 var file_cluster_raft_proto_depIdxs = []int32{
 	4, // 0: cluster.AppendEntriesRequest.entries:type_name -> cluster.LogEntry
-	0, // 1: cluster.RaftService.RequestVote:input_type -> cluster.RequestVoteRequest
+	0, // 1: cluster.RaftService.ProcessVoteRequest:input_type -> cluster.RequestVoteRequest
 	2, // 2: cluster.RaftService.AppendEntries:input_type -> cluster.AppendEntriesRequest
-	1, // 3: cluster.RaftService.RequestVote:output_type -> cluster.RequestVoteResponse
+	1, // 3: cluster.RaftService.ProcessVoteRequest:output_type -> cluster.RequestVoteResponse
 	3, // 4: cluster.RaftService.AppendEntries:output_type -> cluster.AppendEntriesResponse
 	3, // [3:5] is the sub-list for method output_type
 	1, // [1:3] is the sub-list for method input_type
