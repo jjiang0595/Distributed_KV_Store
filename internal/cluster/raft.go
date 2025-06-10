@@ -231,6 +231,24 @@ func (n *Node) RunRaftLoop() {
 					}
 				}
 				n.RaftMu.Unlock()
+				// Update Leader's Commit Index
+				for i := len(n.Log) - 1; i >= 0; i-- {
+					if n.CurrentTerm != n.Log[i].Term {
+						break
+					}
+					majorityCount := 1
+					for peerId, _ := range n.Peers {
+						if n.MatchIndex[peerId] >= uint64(i) {
+							majorityCount++
+						}
+					}
+					if majorityCount >= len(n.Peers)/2+1 {
+						n.CommitIndex = uint64(i) + 1
+						log.Printf("Committed Index is %v", n.CommitIndex)
+						n.ApplierCond.Broadcast()
+						break
+					}
+				}
 			case clientReq := <-n.ClientCommandChan:
 				log.Printf("Client Request Received: %v", clientReq)
 				commandBytes, err := json.Marshal(clientReq)
