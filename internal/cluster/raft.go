@@ -200,6 +200,37 @@ func (n *Node) RunRaftLoop() {
 		case Leader:
 			log.Printf("------------------------Leader---------------------------------")
 			select {
+			case <-n.Ctx.Done():
+				log.Printf("Leader %s: Shutting down", n.ID)
+				return
+			case wrappedResp := <-n.AppendEntriesResponseChan:
+				n.RaftMu.Lock()
+				grpcResponse := wrappedResp.Response
+				if grpcResponse != nil && n.CurrentTerm < grpcResponse.Term {
+					log.Printf("Leader's %s term is less than follower, reverting to follower.", n.ID)
+					n.State = Follower
+					n.LeaderID = ""
+					n.CurrentTerm = grpcResponse.Term
+					go n.PersistRaftState()
+					n.StopReplicators()
+					n.ResetElectionTimeout()
+					n.RaftMu.Unlock()
+					return
+				}
+
+				if grpcResponse.Success {
+					log.Printf("Leader %s: Successfully replicated to nodes", n.ID)
+					if n.NextIndex[wrappedResp.PeerID] > 0 {
+						n.MatchIndex[wrappedResp.PeerID] = wrappedResp.PrevLogIndex + uint64(len(wrappedResp.SentEntries))
+						n.NextIndex[wrappedResp.PeerID] = wrappedResp.PrevLogIndex + uint64(len(wrappedResp.SentEntries)) + 1
+					}
+				} else {
+					log.Printf("Node %s: Failed to replicate to follower", n.ID)
+					if n.NextIndex[wrappedResp.PeerID] > 1 {
+						n.NextIndex[wrappedResp.PeerID] -= 1
+					}
+				}
+				n.RaftMu.Unlock()
 			case clientReq := <-n.ClientCommandChan:
 				log.Printf("Client Request Received: %v", clientReq)
 				commandBytes, err := json.Marshal(clientReq)
@@ -484,13 +515,11 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			term, leaderID, commitIndex := n.CurrentTerm, n.LeaderID, n.CommitIndex
 			logSnapshot := make([]*LogEntry, len(n.Log))
 			copy(logSnapshot, n.Log)
-
 			peerNextIndex, ok := n.NextIndex[followerID]
 			if !ok {
 				peerNextIndex = 1
 			}
 			n.RaftMu.Unlock()
-
 			prevLogIndex, prevLogTerm := uint64(0), uint64(0)
 			if peerNextIndex > 1 {
 				if peerNextIndex-2 < uint64(len(logSnapshot)) {
@@ -503,7 +532,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 				}
 			}
 
-			var entries []*LogEntry
+			entries := make([]*LogEntry, 0)
 
 			if peerNextIndex > 0 && peerNextIndex <= uint64(len(logSnapshot)) {
 				entries = logSnapshot[peerNextIndex-1:]
@@ -527,41 +556,26 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			})
 			if err != nil {
 				log.Printf("Error appending raft log: %v", err)
-			}
-			n.RaftMu.Lock()
-			if response != nil && term < response.Term {
-				log.Printf("Leader's %s term is less than follower, reverting to follower.", n.ID)
-				n.State = Follower
-				n.LeaderID = ""
-				n.CurrentTerm = response.Term
-				err := n.SaveRaftState()
-				if err != nil {
-					log.Fatalf("Error saving raft state: %v", err)
-				}
-				go n.PersistRaftState()
-				n.StopReplicators()
-				n.ResetElectionTimeout()
-				n.RaftMu.Unlock()
+				cancel()
 				return
 			}
+			wrappedResp := &AppendEntriesResponseWrapper{
+				Response:     response,
+				Error:        err,
+				PeerID:       peer.ID,
+				PrevLogIndex: prevLogIndex,
+				SentEntries:  entries,
+			}
+			n.AppendEntriesResponseChan <- wrappedResp
 
 			sleepDuration := 10 * time.Millisecond
 			if response.Success {
 				log.Printf("Leader %s: Successfully replicated to nodes", n.ID)
 				sleepDuration = 50 * time.Millisecond
-				if n.NextIndex[followerID] > 0 {
-					n.MatchIndex[followerID] = prevLogIndex + uint64(len(entries))
-					n.NextIndex[followerID] = prevLogIndex + uint64(len(entries)) + 1
-				}
-			} else {
-				log.Printf("Node %s: Failed to replicate to follower", n.ID)
-				if n.NextIndex[followerID] > 1 {
-					n.NextIndex[followerID] -= 1
-				}
 			}
+			cancel()
 			log.Printf("MatchIndex: %v, NextIndex: %v", n.MatchIndex[followerID], n.NextIndex[followerID])
-			n.RaftMu.Unlock()
-
+			log.Printf("Log: %v", n.Log)
 			log.Printf("Leader %s: Sleep %v", n.ID, sleepDuration)
 			time.Sleep(sleepDuration)
 		}
