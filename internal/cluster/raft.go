@@ -79,9 +79,12 @@ type Node struct {
 	RequestVoteChan           chan *RequestVoteRequestWrapper
 	RequestVoteResponseChan   chan *RequestVoteResponse
 
-	ReplicatorCtx    context.Context
-	ReplicatorCancel context.CancelFunc
 	ApplierCond *sync.Cond
+
+	Ctx              context.Context
+	Cancel           context.CancelFunc
+	ReplicatorCancel map[string]context.CancelFunc
+
 	// WaitGroups
 	ApplierWg    sync.WaitGroup
 	RaftLoopWg   sync.WaitGroup
@@ -422,8 +425,9 @@ func (n *Node) StopReplicators() {
 		log.Printf("Leader %s: No replicators to end", n.ID)
 func (n *Node) Shutdown() {
 	n.RaftMu.Lock()
-	n.StopReplicators()
 	n.Cancel()
+	n.StopReplicators()
+	n.ApplierWg.Done()
 	n.RaftMu.Unlock()
 
 	done := make(chan struct{})
@@ -438,8 +442,8 @@ func (n *Node) Shutdown() {
 	select {
 	case <-done:
 		log.Printf("Node %s: All follower goroutines stopped fully", n.ID)
-	case <-time.After(150 * time.Millisecond):
-		log.Printf("Node %s: Timed out after 150ms. Some goroutines may still be running", n.ID)
+	case <-time.After(3 * time.Second):
+		log.Printf("Node %s: Timed out after 3 sec. Some goroutines may still be running", n.ID)
 	}
 }
 
@@ -468,7 +472,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 
 	for {
 		select {
-		case <-stopCtx.Done():
+		case <-n.Ctx.Done():
 			log.Printf("Leader %s: ReplicateToFollower stopped", n.ID)
 			return
 		default:

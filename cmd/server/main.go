@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"distributed_kv_store/internal/cluster"
 	"flag"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 )
 
 type Config struct {
@@ -92,11 +95,13 @@ func main() {
 		RequestVoteResponseChan:   make(chan *cluster.RequestVoteResponse),
 	}
 
-	//err = node.LoadRaftState()
-	//if err != nil {
-	//	log.Fatalf("Error loading raft state: %v", err)
-	//}
-	//err = node.LoadRaftLog()
+	err = node.LoadRaftState()
+	if err != nil {
+		log.Fatalf("Error loading raft state: %v", err)
+	}
+
+	node.Ctx, node.Cancel = context.WithCancel(context.Background())
+	defer node.Cancel()
 
 	for _, peer := range cfg.Cluster.Peers {
 		if peer.ID == node.ID {
@@ -110,10 +115,17 @@ func main() {
 			DataDir:  peer.DataDir,
 		}
 	}
-	node.PersistWg.Add(1)
 	node.RaftLoopWg.Add(1)
+	node.ApplierWg.Add(1)
+	node.PersistWg.Add(1)
 	go node.PersistStateGoroutine()
+
+	node.ApplierCond = sync.NewCond(&node.RaftMu)
+	go node.ApplierGoroutine()
 	go node.RunRaftLoop()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
@@ -142,7 +154,6 @@ func main() {
 				if err != nil {
 					log.Printf("Error writing response: %v", err)
 				}
-				return
 			default:
 				if leaderId == "" {
 					w.WriteHeader(http.StatusServiceUnavailable)
@@ -173,6 +184,18 @@ func main() {
 			}
 		}
 	})
-	fmt.Printf("Listening on port %d\n", node.Port)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", node.Port), nil))
+
+	go func() {
+		log.Printf("Listening on port %d", node.Port)
+		if http.ListenAndServe(fmt.Sprintf(":%d", node.Port), nil) != nil {
+			log.Fatalf("Error listening on port %d: %v", node.Port, err)
+		}
+		log.Printf("HTTP Server Goroutine Finished")
+	}()
+
+	sig := <-sigChan
+	log.Printf("Received signal: %v", sig)
+
+	node.Shutdown()
+	os.Exit(0)
 }
