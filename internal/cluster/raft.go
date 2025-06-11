@@ -258,6 +258,7 @@ func (n *Node) RunRaftLoop() {
 					if majorityCount >= len(n.Peers)/2+1 {
 						n.CommitIndex = uint64(i) + 1
 						log.Printf("Committed Index is %v", n.CommitIndex)
+						go n.PersistRaftState()
 						n.ApplierCond.Broadcast()
 						break
 					}
@@ -789,6 +790,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 			lastEntryIndex = s.mainNode.Log[len(s.mainNode.Log)-1].Index
 		}
 		s.mainNode.CommitIndex = min(req.LeaderCommit, lastEntryIndex)
+		go s.mainNode.PersistRaftState()
 		s.mainNode.ApplierCond.Broadcast()
 	}
 	log.Printf("Current Log: %v", s.mainNode.Log)
