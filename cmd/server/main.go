@@ -115,6 +115,7 @@ func main() {
 			DataDir:  peer.DataDir,
 		}
 	}
+
 	node.RaftLoopWg.Add(1)
 	node.ApplierWg.Add(1)
 	node.PersistWg.Add(1)
@@ -122,6 +123,7 @@ func main() {
 
 	node.ApplierCond = sync.NewCond(&node.RaftMu)
 	go node.ApplierGoroutine()
+	node.ApplierCond.Broadcast()
 	go node.RunRaftLoop()
 
 	sigChan := make(chan os.Signal, 1)
