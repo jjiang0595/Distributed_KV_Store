@@ -374,10 +374,8 @@ func (n *Node) RunRaftLoop() {
 
 				n.RaftMu.Lock()
 				votesReceivedLen, peersLen := len(n.VotesReceived), len(n.Peers)
-				n.RaftMu.Unlock()
 
-				if uint64(votesReceivedLen) > uint64(peersLen/2)+1 {
-					n.RaftMu.Lock()
+				if uint64(votesReceivedLen) >= uint64(peersLen/2)+1 {
 					n.State = Leader
 					n.LeaderID = n.ID
 					n.NextIndex = make(map[string]uint64)
@@ -388,16 +386,16 @@ func (n *Node) RunRaftLoop() {
 						}
 						n.NextIndex[peer.ID] = func() uint64 {
 							if len(n.Log) == 0 {
-								return 0
+								return 1
 							}
 							return n.Log[len(n.Log)-1].Index + 1
 						}()
 						n.MatchIndex[peer.ID] = 0
 					}
-					n.RaftMu.Unlock()
 					log.Printf("New Leader - %s. VotesReceived %v", n.ID, n.VotesReceived)
 					n.StartReplicators()
 				}
+				n.RaftMu.Unlock()
 			}
 
 		case Follower:
