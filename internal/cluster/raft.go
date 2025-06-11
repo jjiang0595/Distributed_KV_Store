@@ -667,10 +667,13 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 	log.Printf("Processing vote request...")
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
+	if req.Term < s.mainNode.CurrentTerm {
+		return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: false, VoterId: s.mainNode.ID}, nil
+	}
+
 	if req.Term > s.mainNode.CurrentTerm {
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
-		s.mainNode.VotesReceived = make(map[string]bool)
 		s.mainNode.State = Follower
 		go s.mainNode.PersistRaftState()
 	}
