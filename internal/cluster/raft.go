@@ -1,13 +1,13 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -132,11 +132,13 @@ func NewRaftServer(mainNode *Node) *RaftServer {
 func (n *Node) PersistRaftState() {
 	n.RaftMu.Lock()
 	defer n.RaftMu.Unlock()
+	logCopy := make([]*LogEntry, len(n.Log))
+	copy(logCopy, n.Log)
 
 	savedState := &PersistentState{
 		CurrentTerm: n.CurrentTerm,
 		VotedFor:    n.VotedFor,
-		Log:         n.Log,
+		Log:         logCopy,
 	}
 
 	n.PersistStateChan <- savedState
