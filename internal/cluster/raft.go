@@ -592,9 +592,9 @@ func (n *Node) ApplierGoroutine() {
 
 	for n.LastApplied < n.CommitIndex {
 		n.LastApplied++
-
+		logEntry := n.Log[n.LastApplied-1]
 		var cmd Command
-		err := json.Unmarshal(entry.Command, &cmd)
+		err := json.Unmarshal(logEntry.Command, &cmd)
 		if err != nil {
 			log.Fatalf("Error unmarshalling command: %v", err)
 		}
