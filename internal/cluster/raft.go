@@ -349,8 +349,7 @@ func (n *Node) RunRaftLoop() {
 				}
 
 			case aeWrapper := <-n.AppendEntriesChan:
-				n.RaftMu.Lock()
-				ctx, cancel := context.WithTimeout(aeWrapper.Ctx, time.Millisecond*50)
+				log.Printf("Request received in AppendEntriesChan")
 				response, err := raftServer.ProcessAppendEntriesRequest(aeWrapper.Ctx, aeWrapper.Request)
 				if err != nil {
 					log.Printf("Error appending entries: %v", err)
@@ -367,10 +366,6 @@ func (n *Node) RunRaftLoop() {
 				n.RaftMu.Unlock()
 				aeWrapper.Response <- response
 
-			case reqVoteWrapper := <-n.RequestVoteChan:
-				ctx, cancel := context.WithTimeout(reqVoteWrapper.Ctx, 50*time.Millisecond)
-
-				response, err := raftServer.ProcessVoteRequest(ctx, reqVoteWrapper.Request)
 				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
@@ -430,8 +425,6 @@ func (n *Node) RunRaftLoop() {
 				go n.PersistRaftState()
 
 			case aeReq := <-n.AppendEntriesChan:
-				ctx, cancel := context.WithTimeout(aeReq.Ctx, time.Millisecond*50)
-
 				log.Printf("Request received in AppendEntriesChan")
 				response, err := raftServer.ProcessAppendEntriesRequest(aeReq.Ctx, aeReq.Request)
 				if err != nil {
@@ -571,9 +564,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 				entries = []*LogEntry{}
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-			defer cancel()
-
+			ctx, cancel := context.WithTimeout(n.Ctx, 150*time.Millisecond)
 			log.Printf("Leader %s: ReplicateToFollower sending logs to %v", leaderID, followerID)
 			response, err := peerClient.AppendEntries(ctx, &AppendEntriesRequest{
 				Term:         term,
