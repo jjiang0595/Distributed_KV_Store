@@ -54,7 +54,6 @@ type Node struct {
 
 	// KV Store Data
 	Data map[string][]byte
-	Mu   sync.Mutex
 
 	// Raft
 	RaftMu sync.Mutex
@@ -290,9 +289,9 @@ func (n *Node) RunRaftLoop() {
 				n.VotesReceived = make(map[string]bool)
 				n.VotesReceived[n.ID] = true
 				go n.PersistRaftState()
+				n.ResetElectionTimeout()
 				n.RaftMu.Unlock()
 
-				n.ResetElectionTimeout()
 				for _, peer := range n.Peers {
 					if peer.ID == n.ID {
 						continue
@@ -302,9 +301,6 @@ func (n *Node) RunRaftLoop() {
 						conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", peer.Address, peer.GrpcPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
 						if err != nil {
 							log.Printf("Error connecting to peer %s:%d %v", peer.Address, peer.Port, err)
-							if conn != nil {
-								conn.Close()
-							}
 							return
 						}
 						defer func(conn *grpc.ClientConn) {
@@ -337,6 +333,8 @@ func (n *Node) RunRaftLoop() {
 							LastLogIndex: lastLogIndex,
 							LastLogTerm:  lastLogTerm,
 						}
+						ctx, cancel := context.WithTimeout(n.Ctx, 150*time.Millisecond)
+						defer cancel()
 						response, err := peerClient.RequestVote(ctx, voteRequest)
 						if err != nil {
 							log.Printf("Error requesting vote: %v", err)
@@ -358,12 +356,13 @@ func (n *Node) RunRaftLoop() {
 				}
 				aeWrapper.Response <- response
 
+			case reqVoteReq := <-n.RequestVoteChan:
 				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
+				response, err := raftServer.ProcessVoteRequest(reqVoteReq.Ctx, reqVoteReq.Request)
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
 				}
-				cancel()
-				reqVoteWrapper.Response <- response
+				reqVoteReq.Response <- response
 
 			case reqVoteRespWrapper := <-n.RequestVoteResponseChan:
 				raftServer.ReceiveVote(reqVoteRespWrapper)
@@ -573,7 +572,6 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 
 			sleepDuration := 10 * time.Millisecond
 			if response.Success {
-				log.Printf("Leader %s: Successfully replicated to nodes", n.ID)
 				sleepDuration = 50 * time.Millisecond
 			}
 			cancel()
@@ -601,7 +599,6 @@ func (n *Node) ApplierGoroutine() {
 		}
 
 		n.Data[cmd.Key] = cmd.Value
-		n.ApplierWg.Done()
 		log.Printf("Node %s: PUT %s -> %s", n.ID, cmd.Key, string(cmd.Value))
 	}
 	n.RaftMu.Unlock()
