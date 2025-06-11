@@ -592,23 +592,28 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 
 func (n *Node) ApplierGoroutine() {
 	n.RaftMu.Lock()
-	for n.CommitIndex <= n.LastApplied {
-		n.ApplierCond.Wait()
-	}
-
-	for n.LastApplied < n.CommitIndex {
-		n.LastApplied++
-		logEntry := n.Log[n.LastApplied-1]
-		var cmd Command
-		err := json.Unmarshal(logEntry.Command, &cmd)
-		if err != nil {
-			log.Fatalf("Error unmarshalling command: %v", err)
+	defer n.RaftMu.Unlock()
+	for {
+		for n.CommitIndex <= n.LastApplied {
+			n.ApplierCond.Wait()
+			log.Printf("CommitIndex: %v, LastApplied: %v", n.CommitIndex, n.LastApplied)
 		}
 
-		n.Data[cmd.Key] = cmd.Value
-		log.Printf("Node %s: PUT %s -> %s", n.ID, cmd.Key, string(cmd.Value))
+		for n.LastApplied < n.CommitIndex {
+			log.Printf("Increasing n.LastApplied: %v", n.LastApplied)
+			n.LastApplied++
+			logEntry := n.Log[n.LastApplied-1]
+			var cmd Command
+			err := json.Unmarshal(logEntry.Command, &cmd)
+			if err != nil {
+				log.Fatalf("Error unmarshalling command: %v", err)
+			}
+
+			n.Data[cmd.Key] = cmd.Value
+			go n.PersistRaftState()
+			log.Printf("Node %s: PUT %s -> %s", n.ID, cmd.Key, string(cmd.Value))
+		}
 	}
-	n.RaftMu.Unlock()
 }
 
 func (n *Node) PersistStateGoroutine() {
