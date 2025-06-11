@@ -289,9 +289,6 @@ func (n *Node) RunRaftLoop() {
 				n.VotedFor = n.ID
 				n.VotesReceived = make(map[string]bool)
 				n.VotesReceived[n.ID] = true
-				if err := n.SaveRaftState(); err != nil {
-					log.Fatalf("error saving raft state: %v", err)
-				}
 				go n.PersistRaftState()
 				n.RaftMu.Unlock()
 
@@ -414,10 +411,6 @@ func (n *Node) RunRaftLoop() {
 				n.RaftMu.Unlock()
 
 				n.ResetElectionTimeout()
-				if err := n.SaveRaftState(); err != nil {
-					log.Fatalf("error saving raft state: %v", err)
-				}
-				go n.PersistRaftState()
 
 			case aeReq := <-n.AppendEntriesChan:
 				log.Printf("Request received in AppendEntriesChan")
@@ -634,7 +627,7 @@ func (n *Node) PersistStateGoroutine() {
 
 			file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 			if err != nil {
-				log.Printf("Error opening file: %v", err)
+				log.Fatalf("Error opening file: %v", err)
 			}
 
 			if _, err := file.Write(buffer.Bytes()); err != nil {
