@@ -276,6 +276,9 @@ func (n *Node) RunRaftLoop() {
 		case Candidate:
 			log.Printf("------------------------Candidate---------------------------------")
 			select {
+			case <-n.Ctx.Done():
+				log.Printf("Candidate %s: Shutting down", n.ID)
+				return
 			case <-n.ElectionTimeout.C:
 				n.RaftMu.Lock()
 				log.Printf("Candidate - Election timeout")
@@ -404,7 +407,11 @@ func (n *Node) RunRaftLoop() {
 			}
 
 		case Follower:
+			log.Printf("------------------------Follower---------------------------------")
 			select {
+			case <-n.Ctx.Done():
+				log.Printf("Follower %s: Shutting down", n.ID)
+				return
 			case <-n.ElectionTimeout.C:
 				log.Printf("Follower - Election timeout")
 				n.RaftMu.Lock()
