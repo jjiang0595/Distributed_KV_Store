@@ -371,6 +371,7 @@ func (n *Node) RunRaftLoop() {
 				ctx, cancel := context.WithTimeout(reqVoteWrapper.Ctx, 50*time.Millisecond)
 
 				response, err := raftServer.ProcessVoteRequest(ctx, reqVoteWrapper.Request)
+				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
 				}
@@ -431,6 +432,7 @@ func (n *Node) RunRaftLoop() {
 			case aeReq := <-n.AppendEntriesChan:
 				ctx, cancel := context.WithTimeout(aeReq.Ctx, time.Millisecond*50)
 
+				log.Printf("Request received in AppendEntriesChan")
 				response, err := raftServer.ProcessAppendEntriesRequest(aeReq.Ctx, aeReq.Request)
 				if err != nil {
 					log.Printf("Error appending entries: %v", err)
@@ -447,14 +449,11 @@ func (n *Node) RunRaftLoop() {
 				aeReq.Response <- response
 
 			case reqVoteReq := <-n.RequestVoteChan:
-				fmt.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
-				ctx, cancel := context.WithTimeout(reqVoteReq.Ctx, 50*time.Millisecond)
-
-				response, err := raftServer.ProcessVoteRequest(ctx, reqVoteReq.Request)
+				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
+				response, err := raftServer.ProcessVoteRequest(reqVoteReq.Ctx, reqVoteReq.Request)
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
 				}
-				cancel()
 				reqVoteReq.Response <- response
 			}
 		}
@@ -620,7 +619,6 @@ func (n *Node) ApplierGoroutine() {
 
 	for n.LastApplied < n.CommitIndex {
 		n.LastApplied++
-		entry := n.Log[n.LastApplied-1]
 
 		var cmd Command
 		err := json.Unmarshal(entry.Command, &cmd)
@@ -686,6 +684,7 @@ func (n *Node) ResetElectionTimeout() {
 }
 
 func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
+	log.Printf("Processing vote request...")
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
 	if req.Term > s.mainNode.CurrentTerm {
@@ -755,7 +754,6 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		s.mainNode.VotesReceived = make(map[string]bool)
 		go s.mainNode.PersistRaftState()
 	}
-	s.mainNode.LeaderID = req.LeaderId
 
 	s.mainNode.ResetElectionTimeout()
 
@@ -774,11 +772,6 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 	for i, entry := range req.Entries {
 		leaderIndex := req.PrevLogIndex + uint64(i) + 1
 
-		if leaderIndex > uint64(len(s.mainNode.Log)) {
-			s.mainNode.Log = append(s.mainNode.Log, entry)
-		} else {
-			if s.mainNode.Log[leaderIndex-1].Term != entry.Term {
-				s.mainNode.Log = s.mainNode.Log[:leaderIndex-1]
 			}
 			s.mainNode.Log = append(s.mainNode.Log, entry)
 			go s.mainNode.PersistRaftState()
