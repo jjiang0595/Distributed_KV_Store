@@ -730,6 +730,7 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 }
 
 func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+	log.Printf("Processing AppendEntries Request...")
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
 
@@ -747,6 +748,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 	}
 
 	s.mainNode.ResetElectionTimeout()
+	s.mainNode.LeaderID = req.LeaderId
 
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if req.PrevLogIndex > uint64(len(s.mainNode.Log)) {
@@ -758,23 +760,27 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
 	}
 
-	originalLength := len(s.mainNode.Log)
-	// Find and truncate if a potential conflicting entry is found, otherwise append all entries
+	// Find and truncate if a potential conflicting entry is found. Then append all entries
+	if len(req.Entries) == 0 {
+		log.Printf("Received heartbeat from leader %s", s.mainNode.LeaderID)
+	} else {
+		log.Printf("Entries: %v", req.Entries)
+	}
 	for i, entry := range req.Entries {
 		leaderIndex := req.PrevLogIndex + uint64(i) + 1
 
-			}
-			s.mainNode.Log = append(s.mainNode.Log, entry)
+		followerIndex := leaderIndex - 1
+		log.Printf("%v, %v", leaderIndex, followerIndex)
+		if followerIndex >= leaderIndex || leaderIndex > uint64(len(s.mainNode.Log)) {
+			s.mainNode.Log = append(s.mainNode.Log, req.Entries[i:]...)
 			go s.mainNode.PersistRaftState()
+			return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
 		}
-	}
-
-	newEntries := s.mainNode.Log[originalLength:]
-	if len(newEntries) > 0 {
-		err := s.mainNode.SaveLogEntries(newEntries)
-		if err != nil {
-			return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
+		if s.mainNode.Log[followerIndex].Term != entry.Term {
+			s.mainNode.Log = s.mainNode.Log[:followerIndex]
+			s.mainNode.Log = append(s.mainNode.Log, req.Entries[i:]...)
 			go s.mainNode.PersistRaftState()
+			return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
 		}
 	}
 
@@ -784,8 +790,8 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 			lastEntryIndex = s.mainNode.Log[len(s.mainNode.Log)-1].Index
 		}
 		s.mainNode.CommitIndex = min(req.LeaderCommit, lastEntryIndex)
+		s.mainNode.ApplierCond.Broadcast()
 	}
-	fmt.Printf("%+v\n", s.mainNode.Log)
 	log.Printf("Current Log: %v", s.mainNode.Log)
 	return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
 }
