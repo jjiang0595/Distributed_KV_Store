@@ -357,13 +357,6 @@ func (n *Node) RunRaftLoop() {
 						response = &AppendEntriesResponse{Term: n.CurrentTerm, Success: false}
 					}
 				}
-				if n.CommitIndex > n.LastApplied {
-					n.ApplyCommittedEntries()
-					n.ApplierWg.Add(1)
-					n.ApplierCond.Broadcast()
-				}
-				cancel()
-				n.RaftMu.Unlock()
 				aeWrapper.Response <- response
 
 				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
@@ -433,12 +426,6 @@ func (n *Node) RunRaftLoop() {
 						response = &AppendEntriesResponse{Term: n.CurrentTerm, Success: false}
 					}
 				}
-				if n.CommitIndex > n.LastApplied {
-					n.ApplyCommittedEntries()
-					n.ApplierWg.Add(1)
-					n.ApplierCond.Broadcast()
-				}
-				cancel()
 				aeReq.Response <- response
 
 			case reqVoteReq := <-n.RequestVoteChan:
