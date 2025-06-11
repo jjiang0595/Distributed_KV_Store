@@ -693,9 +693,9 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 		s.mainNode.CurrentTerm = req.Term
 		s.mainNode.VotesReceived = make(map[string]bool)
 		s.mainNode.State = Follower
-		s.mainNode.ResetElectionTimeout()
 		go s.mainNode.PersistRaftState()
 	}
+	s.mainNode.ResetElectionTimeout()
 	var lastLogTerm uint64 = 0
 	if len(s.mainNode.Log) > 0 {
 		lastLogTerm = s.mainNode.Log[len(s.mainNode.Log)-1].Term
@@ -726,7 +726,9 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 		s.mainNode.CurrentTerm = voterTerm
 		s.mainNode.State = Follower
 		s.mainNode.VotesReceived = make(map[string]bool)
+		s.mainNode.ResetElectionTimeout()
 		go s.mainNode.PersistRaftState()
+
 		return
 	}
 
@@ -750,11 +752,12 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		s.mainNode.VotedFor = ""
 		s.mainNode.CurrentTerm = req.Term
 		s.mainNode.State = Follower
-		s.mainNode.ResetElectionTimeout()
+		s.mainNode.VotesReceived = make(map[string]bool)
 		go s.mainNode.PersistRaftState()
 	}
 	s.mainNode.LeaderID = req.LeaderId
 
+	s.mainNode.ResetElectionTimeout()
 
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if req.PrevLogIndex > uint64(len(s.mainNode.Log)) {
