@@ -408,6 +408,7 @@ func (n *Node) RunRaftLoop() {
 				n.VotedFor = n.ID
 				n.VotesReceived = make(map[string]bool)
 				n.VotesReceived[n.ID] = true
+				go n.PersistRaftState()
 				n.RaftMu.Unlock()
 
 				n.ResetElectionTimeout()
@@ -607,12 +608,14 @@ func (n *Node) ApplierGoroutine() {
 }
 
 func (n *Node) PersistStateGoroutine() {
+	defer n.PersistWg.Done()
 	for {
 		select {
+		case <-n.Ctx.Done():
 			log.Printf("Leader %s: PersistStateGoroutine stopped through Ctx.Done()", n.ID)
+			return
 		case raftState, ok := <-n.PersistStateChan:
 			if !ok {
-				n.PersistWg.Done()
 				log.Printf("Leader %s: PersistStateGoroutine stopped through !ok", n.ID)
 				return
 			}
