@@ -582,9 +582,11 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 				sleepDuration = 50 * time.Millisecond
 			}
 			cancel()
+			n.RaftMu.Lock()
 			log.Printf("MatchIndex: %v, NextIndex: %v", n.MatchIndex[followerID], n.NextIndex[followerID])
 			log.Printf("Log: %v", n.Log)
 			log.Printf("Leader %s: Sleep %v", n.ID, sleepDuration)
+			n.RaftMu.Unlock()
 			time.Sleep(sleepDuration)
 		}
 	}
