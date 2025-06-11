@@ -478,14 +478,12 @@ func (n *Node) StartReplicators() {
 }
 
 func (n *Node) StopReplicators() {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
-	if n.ReplicatorCtx != nil {
-		n.ReplicatorCancel()
-		n.ReplicatorCancel = nil
-		n.ReplicatorCtx = nil
-	} else {
-		log.Printf("Leader %s: No replicators to end", n.ID)
+	for _, replicatorCancel := range n.ReplicatorCancel {
+		replicatorCancel()
+	}
+	n.ReplicatorCancel = nil
+}
+
 func (n *Node) Shutdown() {
 	n.RaftMu.Lock()
 	n.Cancel()
