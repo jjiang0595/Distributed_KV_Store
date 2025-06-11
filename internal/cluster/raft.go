@@ -37,6 +37,8 @@ type PersistentState struct {
 	CurrentTerm uint64
 	VotedFor    string
 	Log         []*LogEntry
+	CommitIndex uint64
+	LastApplied uint64
 }
 
 type Command struct {
@@ -138,6 +140,8 @@ func (n *Node) PersistRaftState() {
 		CurrentTerm: n.CurrentTerm,
 		VotedFor:    n.VotedFor,
 		Log:         logCopy,
+		CommitIndex: n.CommitIndex,
+		LastApplied: n.LastApplied,
 	}
 
 	n.PersistStateChan <- savedState
@@ -173,6 +177,7 @@ func (n *Node) LoadRaftState() error {
 	n.CurrentTerm = savedState.CurrentTerm
 	n.VotedFor = savedState.VotedFor
 	n.Log = savedState.Log
+	n.CommitIndex = savedState.CommitIndex
 	return nil
 }
 
@@ -202,6 +207,8 @@ func (n *Node) RunRaftLoop() {
 		currentState := n.State
 		n.RaftMu.Unlock()
 		log.Printf("Current data: %v", n.Data)
+		log.Printf("Current LastApplied: %v", n.LastApplied)
+		log.Printf("Current CommitIndex: %v", n.CommitIndex)
 		switch currentState {
 		case Leader:
 			log.Printf("------------------------Leader---------------------------------")
