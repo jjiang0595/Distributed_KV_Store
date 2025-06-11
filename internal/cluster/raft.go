@@ -462,18 +462,18 @@ func (n *Node) RunRaftLoop() {
 }
 
 func (n *Node) StartReplicators() {
-	n.RaftMu.Lock()
-	if n.ReplicatorCtx != nil {
-		n.ReplicatorCancel()
-	}
-	n.ReplicatorCtx, n.ReplicatorCancel = context.WithCancel(context.Background())
-	n.RaftMu.Unlock()
 	log.Printf("Starting replicators...")
+	n.ReplicatorCancel = make(map[string]context.CancelFunc)
 
-	for _, peer := range n.Peers {
-		log.Printf("Leader %s: Starting replicator for peer %s", n.ID, peer.ID)
-		go n.ReplicateToFollower(n.ReplicatorCtx, peer.ID)
+	for peerID := range n.Peers {
+		if n.ID == peerID {
+			continue
+		}
+		replicatorCtx, replicatorCancel := context.WithCancel(n.Ctx)
+		n.ReplicatorCancel[peerID] = replicatorCancel
 		n.ReplicatorWg.Add(1)
+		log.Printf("Leader %s: Starting replicator for peer %s", n.ID, peerID)
+		go n.ReplicateToFollower(replicatorCtx, peerID)
 	}
 }
 
