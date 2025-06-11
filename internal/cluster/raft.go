@@ -144,7 +144,12 @@ func (n *Node) PersistRaftState() {
 
 func (n *Node) LoadRaftState() error {
 	filePath := filepath.Join(n.DataDir, "raft_state.gob")
-	fmt.Printf("%s", filePath)
+	info, err := os.Stat(filePath)
+	if info.Size() == 0 {
+		log.Printf("Node %s: Raft State File Empty", n.ID)
+		return nil
+	}
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -158,12 +163,12 @@ func (n *Node) LoadRaftState() error {
 			log.Printf("Error closing file: %v", err)
 		}
 	}()
-
 	decoder := gob.NewDecoder(file)
 	var savedState PersistentState
 	if err := decoder.Decode(&savedState); err != nil {
 		return fmt.Errorf("error decoding raft state: %v", err)
 	}
+	log.Printf("Saved State: %v", savedState)
 	n.CurrentTerm = savedState.CurrentTerm
 	n.VotedFor = savedState.VotedFor
 	n.Log = savedState.Log
