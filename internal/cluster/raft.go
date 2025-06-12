@@ -513,6 +513,8 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 		}
 	}()
 	peerClient := NewRaftServiceClient(conn)
+	retryTime := time.Millisecond * 50
+	maxRetryTime := time.Second * 2
 
 	for {
 		select {
@@ -567,6 +569,8 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			})
 			if err != nil {
 				log.Printf("Error appending raft log: %v", err)
+				retryTime = min(maxRetryTime, retryTime*2)
+				time.Sleep(retryTime)
 				cancel()
 				continue
 			}
@@ -579,6 +583,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			}
 			n.AppendEntriesResponseChan <- wrappedResp
 
+			retryTime = 50 * time.Millisecond
 			sleepDuration := 10 * time.Millisecond
 			if response.Success {
 				sleepDuration = 50 * time.Millisecond
