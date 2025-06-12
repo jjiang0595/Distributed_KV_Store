@@ -229,7 +229,7 @@ func (n *Node) RunRaftLoop() {
 					n.StopReplicators()
 					n.ResetElectionTimeout()
 					n.RaftMu.Unlock()
-					return
+					continue
 				}
 
 				if grpcResponse.Success {
@@ -568,7 +568,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			if err != nil {
 				log.Printf("Error appending raft log: %v", err)
 				cancel()
-				return
+				continue
 			}
 			wrappedResp := &AppendEntriesResponseWrapper{
 				Response:     response,
