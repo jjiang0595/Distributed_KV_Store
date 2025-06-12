@@ -207,6 +207,7 @@ func (n *Node) RunRaftLoop() {
 		currentState := n.State
 		n.RaftMu.Unlock()
 		log.Printf("Current data: %v", n.Data)
+		log.Printf("Current Term: %v", n.CurrentTerm)
 		log.Printf("Current LastApplied: %v", n.LastApplied)
 		log.Printf("Current CommitIndex: %v", n.CommitIndex)
 		switch currentState {
@@ -220,7 +221,7 @@ func (n *Node) RunRaftLoop() {
 				n.RaftMu.Lock()
 				grpcResponse := wrappedResp.Response
 				if grpcResponse != nil && n.CurrentTerm < grpcResponse.Term {
-					log.Printf("Leader's %s term is less than follower, reverting to follower.", n.ID)
+					log.Printf("Leader %s %v term is less than follower %s, reverting to follower.", n.ID, n.CurrentTerm, wrappedResp.PeerID)
 					n.State = Follower
 					n.LeaderID = ""
 					n.CurrentTerm = grpcResponse.Term
