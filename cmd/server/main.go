@@ -5,6 +5,7 @@ import (
 	"distributed_kv_store/internal/cluster"
 	"flag"
 	"fmt"
+	"github.com/jonboulle/clockwork"
 	"gopkg.in/yaml.v3"
 	"io"
 	"log"
@@ -12,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync"
 	"syscall"
 )
 
@@ -52,7 +52,7 @@ func LoadConfig(path string) (*Config, error) {
 func main() {
 	configFile := flag.String("config", "config-node1.yaml", "Path to config file")
 	flag.Parse()
-	fmt.Printf("Starting server with configuration file: %s\n", *configFile) // Print the config file name
+	fmt.Printf("Starting server with configuration file: %s\n", *configFile)
 
 	cfg, err := LoadConfig(*configFile)
 	if err != nil {
@@ -67,64 +67,26 @@ func main() {
 		log.Fatal(err)
 	}
 
-	node := &cluster.Node{
-		ID:                        cfg.Node.ID,
-		Address:                   cfg.Node.Address,
-		Port:                      port,
-		GrpcPort:                  gRpcPort,
-		Data:                      make(map[string][]byte),
-		VotedFor:                  "",
-		Peers:                     make(map[string]*cluster.Node),
-		CurrentTerm:               0,
-		DataDir:                   cfg.Node.DataDir,
-		RaftMu:                    sync.Mutex{},
-		Log:                       make([]*cluster.LogEntry, 0),
-		CommitIndex:               0,
-		State:                     cluster.Follower,
-		LastApplied:               0,
-		LeaderID:                  "",
-		VotesReceived:             make(map[string]bool),
-		NextIndex:                 make(map[string]uint64),
-		MatchIndex:                make(map[string]uint64),
-		ElectionTimeout:           nil,
-		AppendEntriesChan:         make(chan *cluster.AppendEntriesRequestWrapper),
-		AppendEntriesResponseChan: make(chan *cluster.AppendEntriesResponseWrapper),
-		ClientCommandChan:         make(chan *cluster.Command, 1),
-		PersistStateChan:          make(chan *cluster.PersistentState, 1),
-		RequestVoteChan:           make(chan *cluster.RequestVoteRequestWrapper),
-		RequestVoteResponseChan:   make(chan *cluster.RequestVoteResponse),
-	}
-
-	err = node.LoadRaftState()
-	if err != nil {
-		log.Fatalf("Error loading raft state: %v", err)
-	}
-
-	node.Ctx, node.Cancel = context.WithCancel(context.Background())
-	defer node.Cancel()
-
+	peerAddresses := make(map[string]string)
+	peerIDs := make([]string, 0)
 	for _, peer := range cfg.Cluster.Peers {
-		if peer.ID == node.ID {
+		if peer.ID == cfg.Node.ID {
 			continue
 		}
-		node.Peers[peer.ID] = &cluster.Node{
-			ID:       peer.ID,
-			Address:  peer.Address,
-			Port:     peer.Port,
-			GrpcPort: peer.GrpcPort,
-			DataDir:  peer.DataDir,
-		}
+		peerIDs = append(peerIDs, peer.ID)
+		peerAddresses[peer.ID] = fmt.Sprintf("%s:%d", peer.Address, peer.GrpcPort)
 	}
 
-	node.RaftLoopWg.Add(1)
-	node.ApplierWg.Add(1)
-	node.PersistWg.Add(1)
-	go node.PersistStateGoroutine()
+	t, err := cluster.NewGRPCTransport(peerAddresses)
+	if err != nil {
+		log.Fatalf("Failed to create grpc transport: %s", err)
+	}
+	defer t.Close()
 
-	node.ApplierCond = sync.NewCond(&node.RaftMu)
-	go node.ApplierGoroutine()
-	node.ApplierCond.Broadcast()
-	go node.RunRaftLoop()
+	clk := clockwork.NewRealClock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	node := cluster.NewNode(ctx, cancel, cfg.Node.ID, cfg.Node.Address, port, gRpcPort, cfg.Node.DataDir, peerIDs, clk, t)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -161,7 +123,7 @@ func main() {
 					w.WriteHeader(http.StatusServiceUnavailable)
 					return
 				}
-				http.Redirect(w, r, fmt.Sprintf("http://%s:%v/%s", node.Peers[leaderId].Address, node.Peers[leaderId].Port, key), http.StatusTemporaryRedirect)
+				http.Redirect(w, r, fmt.Sprintf("http://%s/%s", peerAddresses[leaderId], key), http.StatusTemporaryRedirect)
 				return
 			}
 

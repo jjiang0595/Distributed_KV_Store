@@ -6,8 +6,8 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"github.com/jonboulle/clockwork"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"log"
 	"math/rand"
 	"net"
@@ -60,18 +60,19 @@ type Node struct {
 	// Raft
 	RaftMu sync.Mutex
 
-	Peers           map[string]*Node
-	CurrentTerm     uint64            // Latest term server
-	VotedFor        string            // Candidate ID that the node voted for
-	Log             []*LogEntry       // Replicated messages log
-	CommitIndex     uint64            // Index of highest entry that was known to be committed
-	State           RaftState         // Leader, Candidate, Follower
-	LastApplied     uint64            // Highest index that was applied to state machine (data)
-	LeaderID        string            // Current leader's ID, default ""
-	VotesReceived   map[string]bool   // Set of node IDs that the candidate has received votes from
-	NextIndex       map[string]uint64 // (Leader) The next index that the leader will send to a follower
-	MatchIndex      map[string]uint64 // (Leader) The index that the leader has already replicated its logs up to
-	ElectionTimeout *time.Timer       // Election timer that triggers if no gRPC response is heard from leader
+	Peers            []string
+	CurrentTerm      uint64            // Latest term server
+	VotedFor         string            // Candidate ID that the node voted for
+	Log              []*LogEntry       // Replicated messages log
+	CommitIndex      uint64            // Index of highest entry that was known to be committed
+	State            RaftState         // Leader, Candidate, Follower
+	LastApplied      uint64            // Highest index that was applied to state machine (data)
+	LeaderID         string            // Current leader's ID, default ""
+	VotesReceived    map[string]bool   // Set of node IDs that the candidate has received votes from
+	NextIndex        map[string]uint64 // (Leader) The next index that the leader will send to a follower
+	MatchIndex       map[string]uint64 // (Leader) The index that the leader has already replicated its logs up to
+	ElectionTimeout  *time.Timer       // Election timer that triggers if no gRPC response is heard from leader
+	HeartbeatTimeout *time.Timer
 
 	AppendEntriesChan         chan *AppendEntriesRequestWrapper
 	AppendEntriesResponseChan chan *AppendEntriesResponseWrapper
@@ -91,6 +92,9 @@ type Node struct {
 	RaftLoopWg   sync.WaitGroup
 	PersistWg    sync.WaitGroup
 	ReplicatorWg sync.WaitGroup
+
+	Clock     clockwork.Clock
+	Transport Transport
 }
 
 type NodeMap struct {
@@ -126,6 +130,56 @@ func NewRaftServer(mainNode *Node) *RaftServer {
 	return &RaftServer{
 		mainNode: mainNode,
 	}
+}
+
+func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address string, Port int, GrpcPort int, DataDir string, peerIDs []string, clk clockwork.Clock, t Transport) *Node {
+	node := &Node{
+		ID:                        ID,
+		Address:                   Address,
+		Port:                      Port,
+		GrpcPort:                  GrpcPort,
+		Data:                      make(map[string][]byte),
+		VotedFor:                  "",
+		Peers:                     peerIDs,
+		CurrentTerm:               0,
+		DataDir:                   DataDir,
+		RaftMu:                    sync.Mutex{},
+		Log:                       make([]*LogEntry, 0),
+		CommitIndex:               0,
+		State:                     Follower,
+		LastApplied:               0,
+		LeaderID:                  "",
+		VotesReceived:             make(map[string]bool),
+		NextIndex:                 make(map[string]uint64),
+		MatchIndex:                make(map[string]uint64),
+		ElectionTimeout:           nil,
+		AppendEntriesChan:         make(chan *AppendEntriesRequestWrapper),
+		AppendEntriesResponseChan: make(chan *AppendEntriesResponseWrapper),
+		ClientCommandChan:         make(chan *Command, 1),
+		PersistStateChan:          make(chan *PersistentState, 1),
+		RequestVoteChan:           make(chan *RequestVoteRequestWrapper),
+		RequestVoteResponseChan:   make(chan *RequestVoteResponse),
+		Ctx:                       ctx,
+		Cancel:                    cancel,
+		Clock:                     clk,
+		Transport:                 t,
+	}
+
+	err := node.LoadRaftState()
+	if err != nil {
+		log.Fatalf("Error loading raft state: %v", err)
+	}
+
+	node.RaftLoopWg.Add(1)
+	node.ApplierWg.Add(1)
+	node.PersistWg.Add(1)
+	go node.PersistStateGoroutine()
+
+	node.ApplierCond = sync.NewCond(&node.RaftMu)
+	go node.ApplierGoroutine()
+	go node.RunRaftLoop()
+
+	return node
 }
 
 // State Persistence
@@ -251,8 +305,8 @@ func (n *Node) RunRaftLoop() {
 						break
 					}
 					majorityCount := 1
-					for peerId, _ := range n.Peers {
-						if n.MatchIndex[peerId] >= uint64(i) {
+					for _, peerID := range n.Peers {
+						if n.MatchIndex[peerID] >= uint64(i) {
 							majorityCount++
 						}
 					}
@@ -301,25 +355,12 @@ func (n *Node) RunRaftLoop() {
 				n.ResetElectionTimeout()
 				n.RaftMu.Unlock()
 
-				for _, peer := range n.Peers {
-					if peer.ID == n.ID {
+				for _, peerID := range n.Peers {
+					if peerID == n.ID {
 						continue
 					}
-					go func(peer *Node) {
-						log.Printf("Candidate Election - Node %s sending to Node %s", n.ID, peer.ID)
-						conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", peer.Address, peer.GrpcPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
-						if err != nil {
-							log.Printf("Error connecting to peer %s:%d %v", peer.Address, peer.Port, err)
-							return
-						}
-						defer func(conn *grpc.ClientConn) {
-							err := conn.Close()
-							if err != nil {
-								log.Printf("Error closing peer %s:%d %v", peer.Address, peer.Port, err)
-							}
-						}(conn)
-						peerClient := NewRaftServiceClient(conn)
-
+					log.Printf("%s", peerID)
+					go func(peerID string) {
 						n.RaftMu.Lock()
 						currentTerm := n.CurrentTerm
 						lastLogIndex := func() uint64 {
@@ -342,16 +383,14 @@ func (n *Node) RunRaftLoop() {
 							LastLogIndex: lastLogIndex,
 							LastLogTerm:  lastLogTerm,
 						}
-						ctx, cancel := context.WithTimeout(n.Ctx, 150*time.Millisecond)
-						defer cancel()
-						response, err := peerClient.RequestVote(ctx, voteRequest)
+						response, err := n.Transport.SendRequestVote(peerID, voteRequest)
 						if err != nil {
 							log.Printf("Error requesting vote: %v", err)
 							return
 						}
 						log.Printf("Vote Request Response: %v", response)
 						n.RequestVoteResponseChan <- response
-					}(peer)
+					}(peerID)
 				}
 
 			case aeWrapper := <-n.AppendEntriesChan:
@@ -384,17 +423,17 @@ func (n *Node) RunRaftLoop() {
 					n.LeaderID = n.ID
 					n.NextIndex = make(map[string]uint64)
 					n.MatchIndex = make(map[string]uint64)
-					for _, peer := range n.Peers {
-						if peer.ID == n.ID {
+					for _, peerID := range n.Peers {
+						if peerID == n.ID {
 							continue
 						}
-						n.NextIndex[peer.ID] = func() uint64 {
+						n.NextIndex[peerID] = func() uint64 {
 							if len(n.Log) == 0 {
 								return 1
 							}
 							return n.Log[len(n.Log)-1].Index + 1
 						}()
-						n.MatchIndex[peer.ID] = 0
+						n.MatchIndex[peerID] = 0
 					}
 					log.Printf("New Leader - %s. VotesReceived %v", n.ID, n.VotesReceived)
 					n.StartReplicators()
@@ -448,7 +487,7 @@ func (n *Node) StartReplicators() {
 	log.Printf("Starting replicators...")
 	n.ReplicatorCancel = make(map[string]context.CancelFunc)
 
-	for peerID := range n.Peers {
+	for _, peerID := range n.Peers {
 		if n.ID == peerID {
 			continue
 		}
@@ -493,26 +532,6 @@ func (n *Node) Shutdown() {
 
 func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 	defer n.ReplicatorWg.Done()
-	peer, ok := n.Peers[followerID]
-	if !ok || peer == nil {
-		return
-	}
-	address, grpcPort := peer.Address, peer.GrpcPort
-
-	conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", address, grpcPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Printf("Error creating grpc client: %v", err)
-		if conn != nil {
-			conn.Close()
-		}
-		return
-	}
-	defer func() {
-		if err := conn.Close(); err != nil {
-			log.Fatalf("Error closing grpc client: %v", err)
-		}
-	}()
-	peerClient := NewRaftServiceClient(conn)
 	retryTime := time.Millisecond * 50
 	maxRetryTime := time.Second * 2
 
@@ -557,9 +576,8 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 				entries = []*LogEntry{}
 			}
 
-			ctx, cancel := context.WithTimeout(n.Ctx, 150*time.Millisecond)
 			log.Printf("Leader %s: ReplicateToFollower sending logs to %v", leaderID, followerID)
-			response, err := peerClient.AppendEntries(ctx, &AppendEntriesRequest{
+			response, err := n.Transport.SendAppendEntries(followerID, &AppendEntriesRequest{
 				Term:         term,
 				LeaderId:     leaderID,
 				PrevLogIndex: prevLogIndex,
@@ -571,13 +589,12 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 				log.Printf("Error appending raft log: %v", err)
 				retryTime = min(maxRetryTime, retryTime*2)
 				time.Sleep(retryTime)
-				cancel()
 				continue
 			}
 			wrappedResp := &AppendEntriesResponseWrapper{
 				Response:     response,
 				Error:        err,
-				PeerID:       peer.ID,
+				PeerID:       followerID,
 				PrevLogIndex: prevLogIndex,
 				SentEntries:  entries,
 			}
@@ -588,7 +605,6 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			if response.Success {
 				sleepDuration = 50 * time.Millisecond
 			}
-			cancel()
 			n.RaftMu.Lock()
 			log.Printf("MatchIndex: %v, NextIndex: %v", n.MatchIndex[followerID], n.NextIndex[followerID])
 			log.Printf("Log: %v", n.Log)
