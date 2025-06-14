@@ -513,6 +513,10 @@ func (n *Node) Shutdown() {
 	n.ApplierWg.Done()
 	n.RaftMu.Unlock()
 
+	n.WaitAllGoroutines()
+}
+
+func (n *Node) WaitAllGoroutines() {
 	done := make(chan struct{})
 	go func() {
 		n.ApplierWg.Wait()
