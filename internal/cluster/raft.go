@@ -94,7 +94,7 @@ type Node struct {
 	ReplicatorWg sync.WaitGroup
 
 	Clock     clockwork.Clock
-	Transport Transport
+	Transport NetworkTransport
 }
 
 type NodeMap struct {
@@ -132,7 +132,7 @@ func NewRaftServer(mainNode *Node) *RaftServer {
 	}
 }
 
-func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address string, Port int, GrpcPort int, DataDir string, peerIDs []string, clk clockwork.Clock, t Transport) *Node {
+func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address string, Port int, GrpcPort int, DataDir string, peerIDs []string, clk clockwork.Clock, t NetworkTransport) *Node {
 	node := &Node{
 		ID:                        ID,
 		Address:                   Address,
