@@ -659,7 +659,7 @@ func (n *Node) PersistStateGoroutine() {
 	for {
 		select {
 		case <-n.Ctx.Done():
-			log.Printf("Leader %s: PersistStateGoroutine stopped through Ctx.Done()", n.ID)
+			log.Printf("Node %s: PersistStateGoroutine stopped through Ctx.Done()", n.ID)
 			return
 		case raftState, ok := <-n.PersistStateChan:
 			if !ok {
