@@ -177,6 +177,7 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 
 	node.ApplierCond = sync.NewCond(&node.RaftMu)
 	go node.ApplierGoroutine()
+	node.ApplierCond.Broadcast()
 	go node.RunRaftLoop()
 
 	return node
@@ -510,7 +511,7 @@ func (n *Node) Shutdown() {
 	n.RaftMu.Lock()
 	n.Cancel()
 	n.StopReplicators()
-	n.ApplierWg.Done()
+	n.ApplierCond.Broadcast()
 	n.RaftMu.Unlock()
 
 	n.WaitAllGoroutines()
@@ -620,12 +621,20 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 }
 
 func (n *Node) ApplierGoroutine() {
+	defer n.ApplierWg.Done()
 	n.RaftMu.Lock()
 	defer n.RaftMu.Unlock()
+
 	for {
 		for n.CommitIndex <= n.LastApplied {
-			n.ApplierCond.Wait()
-			log.Printf("CommitIndex: %v, LastApplied: %v", n.CommitIndex, n.LastApplied)
+			select {
+			case <-n.Ctx.Done():
+				log.Printf("Node %s: ApplierGoroutine stopped through Ctx.Done()", n.ID)
+				return
+			default:
+				n.ApplierCond.Wait()
+				log.Printf("CommitIndex: %v, LastApplied: %v", n.CommitIndex, n.LastApplied)
+			}
 		}
 
 		for n.LastApplied < n.CommitIndex {
