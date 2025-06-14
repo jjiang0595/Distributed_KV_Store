@@ -164,22 +164,6 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		Clock:                     clk,
 		Transport:                 t,
 	}
-
-	err := node.LoadRaftState()
-	if err != nil {
-		log.Fatalf("Error loading raft state: %v", err)
-	}
-
-	node.RaftLoopWg.Add(1)
-	node.ApplierWg.Add(1)
-	node.PersistWg.Add(1)
-	go node.PersistStateGoroutine()
-
-	node.ApplierCond = sync.NewCond(&node.RaftMu)
-	go node.ApplierGoroutine()
-	node.ApplierCond.Broadcast()
-	go node.RunRaftLoop()
-
 	return node
 }
 
@@ -237,6 +221,23 @@ func (n *Node) LoadRaftState() error {
 }
 
 // Raft
+
+func (n *Node) Start() {
+	err := n.LoadRaftState()
+	if err != nil {
+		log.Fatalf("Error loading raft state: %v", err)
+	}
+
+	n.RaftLoopWg.Add(1)
+	n.ApplierWg.Add(1)
+	n.PersistWg.Add(1)
+	go n.PersistStateGoroutine()
+
+	n.ApplierCond = sync.NewCond(&n.RaftMu)
+	go n.ApplierGoroutine()
+	n.ApplierCond.Broadcast()
+	go n.RunRaftLoop()
+}
 
 func (n *Node) RunRaftLoop() {
 	defer n.RaftLoopWg.Done()
