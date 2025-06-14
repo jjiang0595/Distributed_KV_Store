@@ -71,8 +71,8 @@ type Node struct {
 	VotesReceived    map[string]bool   // Set of node IDs that the candidate has received votes from
 	NextIndex        map[string]uint64 // (Leader) The next index that the leader will send to a follower
 	MatchIndex       map[string]uint64 // (Leader) The index that the leader has already replicated its logs up to
-	ElectionTimeout  *time.Timer       // Election timer that triggers if no gRPC response is heard from leader
-	HeartbeatTimeout *time.Timer
+	ElectionTimeout  clockwork.Timer   // Election timer that triggers if no gRPC response is heard from leader
+	HeartbeatTimeout clockwork.Timer
 
 	AppendEntriesChan         chan *AppendEntriesRequestWrapper
 	AppendEntriesResponseChan chan *AppendEntriesResponseWrapper
@@ -345,7 +345,7 @@ func (n *Node) RunRaftLoop() {
 			case <-n.Ctx.Done():
 				log.Printf("Candidate %s: Shutting down", n.ID)
 				return
-			case <-n.ElectionTimeout.C:
+			case <-n.ElectionTimeout.Chan():
 				n.RaftMu.Lock()
 				log.Printf("Candidate - Election timeout")
 
@@ -449,7 +449,7 @@ func (n *Node) RunRaftLoop() {
 			case <-n.Ctx.Done():
 				log.Printf("Follower %s: Shutting down", n.ID)
 				return
-			case <-n.ElectionTimeout.C:
+			case <-n.ElectionTimeout.Chan():
 				log.Printf("Follower - Election timeout")
 				n.RaftMu.Lock()
 				n.State = Candidate
@@ -531,7 +531,7 @@ func (n *Node) WaitAllGoroutines() {
 	select {
 	case <-done:
 		log.Printf("Node %s: All follower goroutines stopped fully", n.ID)
-	case <-time.After(3 * time.Second):
+	case <-n.Clock.After(3 * time.Second):
 		log.Printf("Node %s: Timed out after 3 sec. Some goroutines may still be running", n.ID)
 	}
 }
@@ -594,7 +594,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			if err != nil {
 				log.Printf("Error appending raft log: %v", err)
 				retryTime = min(maxRetryTime, retryTime*2)
-				time.Sleep(retryTime)
+				n.Clock.Sleep(retryTime)
 				continue
 			}
 			wrappedResp := &AppendEntriesResponseWrapper{
@@ -616,7 +616,7 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 			log.Printf("Log: %v", n.Log)
 			log.Printf("Leader %s: Sleep %v", n.ID, sleepDuration)
 			n.RaftMu.Unlock()
-			time.Sleep(sleepDuration)
+			n.Clock.Sleep(sleepDuration)
 		}
 	}
 }
@@ -703,7 +703,7 @@ func (n *Node) ResetElectionTimeout() {
 	if n.ElectionTimeout != nil {
 		n.ElectionTimeout.Stop()
 	}
-	n.ElectionTimeout = time.NewTimer(timeout)
+	n.ElectionTimeout = n.Clock.NewTimer(timeout)
 	log.Printf("Node %s: Election timeout set to %dms", n.ID, durationMs)
 }
 
