@@ -171,7 +171,6 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 
 func (n *Node) PersistRaftState() {
 	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
 	logCopy := make([]*LogEntry, len(n.Log))
 	copy(logCopy, n.Log)
 
@@ -182,6 +181,7 @@ func (n *Node) PersistRaftState() {
 		CommitIndex: n.CommitIndex,
 		LastApplied: n.LastApplied,
 	}
+	n.RaftMu.Unlock()
 
 	n.PersistStateChan <- savedState
 }
