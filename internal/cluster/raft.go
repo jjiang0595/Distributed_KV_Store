@@ -189,6 +189,15 @@ func (n *Node) PersistRaftState() {
 func (n *Node) LoadRaftState() error {
 	filePath := filepath.Join(n.DataDir, "raft_state.gob")
 	info, err := os.Stat(filePath)
+
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("Raft state file not found for n %s", n.ID)
+			return nil
+		}
+		return fmt.Errorf("error stating raft state file %s", filePath)
+	}
+
 	if info.Size() == 0 {
 		log.Printf("Node %s: Raft State File Empty", n.ID)
 		return nil
@@ -196,11 +205,7 @@ func (n *Node) LoadRaftState() error {
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			log.Printf("Raft state file not found for n %s", n.ID)
-			return nil
-		}
-		log.Printf("Error opening file: %v", err)
+		return fmt.Errorf("raft state file not found for n %s", n.ID)
 	}
 	defer func() {
 		if err := file.Close(); err != nil {
