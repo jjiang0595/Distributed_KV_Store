@@ -520,13 +520,11 @@ func (n *Node) StopReplicators() {
 }
 
 func (n *Node) Shutdown() {
-	n.RaftMu.Lock()
-	n.Cancel()
+	if n.Ctx != nil {
+		n.Cancel()
+	}
 	n.StopReplicators()
 	n.ApplierCond.Broadcast()
-	n.RaftMu.Unlock()
-
-	n.WaitAllGoroutines()
 }
 
 func (n *Node) WaitAllGoroutines() {
