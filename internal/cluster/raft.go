@@ -218,10 +218,12 @@ func (n *Node) LoadRaftState() error {
 		return fmt.Errorf("error decoding raft state: %v", err)
 	}
 	log.Printf("Saved State: %v", savedState)
+	n.RaftMu.Lock()
 	n.CurrentTerm = savedState.CurrentTerm
 	n.VotedFor = savedState.VotedFor
 	n.Log = savedState.Log
 	n.CommitIndex = savedState.CommitIndex
+	n.RaftMu.Unlock()
 	return nil
 }
 
