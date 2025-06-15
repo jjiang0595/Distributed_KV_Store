@@ -240,7 +240,11 @@ func (n *Node) Start() {
 }
 
 func (n *Node) RunRaftLoop() {
-	defer n.RaftLoopWg.Done()
+	log.Printf("Node %s: Starting Raft", n.ID)
+	defer func() {
+		log.Printf("Node %s: Raft Loop Goroutine stopped", n.ID)
+		n.RaftLoopWg.Done()
+	}()
 	grpcServer := grpc.NewServer()
 	raftServer := NewRaftServer(n)
 	RegisterRaftServiceServer(grpcServer, raftServer)
@@ -537,7 +541,10 @@ func (n *Node) WaitAllGoroutines() {
 }
 
 func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
-	defer n.ReplicatorWg.Done()
+	defer func() {
+		n.ReplicatorWg.Done()
+		log.Printf("Node %s: Replicator goroutine stopped", n.ID)
+	}()
 	retryTime := time.Millisecond * 50
 	maxRetryTime := time.Second * 2
 
@@ -622,7 +629,10 @@ func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
 }
 
 func (n *Node) ApplierGoroutine() {
-	defer n.ApplierWg.Done()
+	defer func() {
+		log.Printf("Node %s: Applier goroutine stopped", n.ID)
+		n.ApplierWg.Done()
+	}()
 	n.RaftMu.Lock()
 	defer n.RaftMu.Unlock()
 
@@ -656,7 +666,10 @@ func (n *Node) ApplierGoroutine() {
 }
 
 func (n *Node) PersistStateGoroutine() {
-	defer n.PersistWg.Done()
+	defer func() {
+		n.PersistWg.Done()
+		log.Printf("Node %s: PersistStateGoroutine stopped", n.ID)
+	}()
 	for {
 		select {
 		case <-n.Ctx.Done():
