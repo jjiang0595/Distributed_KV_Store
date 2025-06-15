@@ -92,6 +92,7 @@ type Node struct {
 	RaftLoopWg   sync.WaitGroup
 	PersistWg    sync.WaitGroup
 	ReplicatorWg sync.WaitGroup
+	StartWg      sync.WaitGroup
 
 	Clock     clockwork.Clock
 	Transport NetworkTransport
@@ -234,16 +235,16 @@ func (n *Node) Start() {
 	if err != nil {
 		log.Fatalf("Error loading raft state: %v", err)
 	}
-
-	n.RaftLoopWg.Add(1)
+	n.StartWg.Add(1)
 	n.ApplierWg.Add(1)
 	n.PersistWg.Add(1)
+	n.RaftLoopWg.Add(1)
+	go n.RunRaftLoop()
 	go n.PersistStateGoroutine()
 
 	n.ApplierCond = sync.NewCond(&n.RaftMu)
 	go n.ApplierGoroutine()
 	n.ApplierCond.Broadcast()
-	go n.RunRaftLoop()
 }
 
 func (n *Node) RunRaftLoop() {
@@ -269,6 +270,7 @@ func (n *Node) RunRaftLoop() {
 	}()
 
 	n.ResetElectionTimeout()
+	n.StartWg.Done()
 	for {
 		n.RaftMu.Lock()
 		currentState := n.State
