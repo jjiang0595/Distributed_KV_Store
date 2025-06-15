@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-type Transport interface {
+type NetworkTransport interface {
 	SendAppendEntries(peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error)
 	SendRequestVote(peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error)
 	Close() error
@@ -22,7 +22,7 @@ type gRPCTransport struct {
 	rpcTimeout time.Duration
 }
 
-func NewGRPCTransport(peerAddresses map[string]string) (Transport, error) {
+func NewGRPCTransport(peerAddresses map[string]string) (NetworkTransport, error) {
 	t := &gRPCTransport{
 		clients:    make(map[string]RaftServiceClient),
 		conns:      make(map[string]*grpc.ClientConn),
