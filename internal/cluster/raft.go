@@ -700,8 +700,11 @@ func (n *Node) PersistStateGoroutine() {
 			if err := file.Sync(); err != nil {
 				log.Fatalf("error saving raft state: %v", err)
 			}
-			file.Close()
+			if err := file.Close(); err != nil {
+				log.Fatalf("error closing file: %v", err)
+			}
 			if err := os.Rename(tmpFilePath, filePath); err != nil {
+				os.Remove(tmpFilePath)
 				log.Fatalf("error renaming saved state: %v", err)
 			}
 			log.Printf("Node %s: Saved to Raft State %s", n.ID, filePath)
