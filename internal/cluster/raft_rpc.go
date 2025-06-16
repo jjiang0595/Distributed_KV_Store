@@ -23,6 +23,15 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		go s.mainNode.PersistRaftState()
 	}
 
+	if req.Term == s.mainNode.currentTerm && s.mainNode.state == Candidate {
+		oldVotedFor := s.mainNode.votedFor
+		s.mainNode.votedFor = ""
+		s.mainNode.state = Follower
+		if oldVotedFor != s.mainNode.votedFor {
+			go s.mainNode.PersistRaftState()
+		}
+	}
+
 	select {
 	case s.mainNode.resetElectionTimeoutChan <- struct{}{}:
 		log.Printf("Sending Resetting Election timeout")
