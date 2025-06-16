@@ -1,9 +1,7 @@
 package cluster
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"github.com/jonboulle/clockwork"
@@ -11,8 +9,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -52,10 +48,10 @@ type Node struct {
 	Address  string `yaml:"address"`
 	Port     int    `yaml:"port"`
 	GrpcPort int    `yaml:"grpc_port"`
-	DataDir  string `yaml:"data_dir"`
+	dataDir  string `yaml:"data_dir"`
 
-	// KV Store Data
-	Data map[string][]byte
+	// KV Store data
+	data map[string][]byte
 
 	// Raft
 	RaftMu sync.Mutex
@@ -168,90 +164,67 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 	return node
 }
 
-// State Persistence
-
-func (n *Node) PersistRaftState() {
-	n.RaftMu.Lock()
-	logCopy := make([]*LogEntry, len(n.Log))
-	copy(logCopy, n.Log)
-
-	savedState := &PersistentState{
-		CurrentTerm: n.CurrentTerm,
-		VotedFor:    n.VotedFor,
-		Log:         logCopy,
-		CommitIndex: n.CommitIndex,
-		LastApplied: n.LastApplied,
-	}
-	n.RaftMu.Unlock()
-
-	n.PersistStateChan <- savedState
-}
-
-func (n *Node) LoadRaftState() error {
-	filePath := filepath.Join(n.DataDir, "raft_state.gob")
-	info, err := os.Stat(filePath)
-
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Printf("Raft state file not found for n %s", n.ID)
-			return nil
-		}
-		return fmt.Errorf("error stating raft state file %s", filePath)
-	}
-
-	if info.Size() == 0 {
-		log.Printf("Node %s: Raft State File Empty", n.ID)
-		return nil
-	}
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("raft state file not found for n %s", n.ID)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			log.Printf("Error closing file: %v", err)
-		}
-	}()
-	decoder := gob.NewDecoder(file)
-	var savedState PersistentState
-	if err := decoder.Decode(&savedState); err != nil {
-		return fmt.Errorf("error decoding raft state: %v", err)
-	}
-	log.Printf("Saved State: %v", savedState)
-	n.RaftMu.Lock()
-	n.CurrentTerm = savedState.CurrentTerm
-	n.VotedFor = savedState.VotedFor
-	n.Log = savedState.Log
-	n.CommitIndex = savedState.CommitIndex
-	n.RaftMu.Unlock()
-	return nil
-}
-
-// Raft
-
 func (n *Node) Start() {
 	err := n.LoadRaftState()
 	if err != nil {
 		log.Fatalf("Error loading raft state: %v", err)
 	}
-	n.StartWg.Add(1)
-	n.ApplierWg.Add(1)
-	n.PersistWg.Add(1)
-	n.RaftLoopWg.Add(1)
+	n.startWg.Add(1)
+	n.applierWg.Add(1)
+	n.persistWg.Add(1)
+	n.raftLoopWg.Add(1)
 	go n.RunRaftLoop()
 	go n.PersistStateGoroutine()
 
-	n.ApplierCond = sync.NewCond(&n.RaftMu)
+	n.applierCond = sync.NewCond(&n.RaftMu)
 	go n.ApplierGoroutine()
-	n.ApplierCond.Broadcast()
+	n.applierCond.Broadcast()
+}
+
+func (n *Node) Shutdown() {
+	log.Printf("Initializing shutdown for %s", n.ID)
+	if n.ctx != nil {
+		n.cancel()
+	}
+	n.StopReplicators()
+	n.applierCond.Broadcast()
+}
+
+func (n *Node) WaitAllGoroutines() {
+	done := make(chan struct{})
+	go func() {
+		n.applierWg.Wait()
+		n.persistWg.Wait()
+		n.raftLoopWg.Wait()
+		n.replicatorWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Printf("Node %s: All follower goroutines stopped fully", n.ID)
+	case <-n.Clock.After(3 * time.Second):
+		log.Printf("Node %s: Timed out after 3 sec. Some goroutines may still be running", n.ID)
+	}
+}
+
+func (n *Node) ResetElectionTimeout() {
+	durationMs := rand.Intn(maxElectionTimeoutMs-minElectionTimeoutMs+1) + minElectionTimeoutMs
+	timeout := time.Duration(durationMs) * time.Millisecond
+
+	if n.electionTimeout != nil {
+		n.electionTimeout.Stop()
+	}
+	n.RaftMu.Lock()
+	n.electionTimeout = n.Clock.NewTimer(timeout)
+	log.Printf("Node %s: Election timeout set to %dms", n.ID, durationMs)
 }
 
 func (n *Node) RunRaftLoop() {
 	log.Printf("Node %s: Starting Raft", n.ID)
 	defer func() {
 		log.Printf("Node %s: Raft Loop Goroutine stopped", n.ID)
-		n.RaftLoopWg.Done()
+		n.raftLoopWg.Done()
 	}()
 	grpcServer := grpc.NewServer()
 	raftServer := NewRaftServer(n)
@@ -270,30 +243,30 @@ func (n *Node) RunRaftLoop() {
 	}()
 
 	n.ResetElectionTimeout()
-	n.StartWg.Done()
+	n.startWg.Done()
 	for {
 		n.RaftMu.Lock()
-		currentState := n.State
+		currentState := n.state
+		log.Printf("Current data: %v", n.data)
+		log.Printf("Current Term: %v", n.currentTerm)
+		log.Printf("Current lastApplied: %v", n.lastApplied)
+		log.Printf("Current commitIndex: %v", n.commitIndex)
 		n.RaftMu.Unlock()
-		log.Printf("Current data: %v", n.Data)
-		log.Printf("Current Term: %v", n.CurrentTerm)
-		log.Printf("Current LastApplied: %v", n.LastApplied)
-		log.Printf("Current CommitIndex: %v", n.CommitIndex)
 		switch currentState {
 		case Leader:
 			log.Printf("------------------------Leader---------------------------------")
 			select {
-			case <-n.Ctx.Done():
+			case <-n.ctx.Done():
 				log.Printf("Leader %s: Shutting down", n.ID)
 				return
-			case wrappedResp := <-n.AppendEntriesResponseChan:
+			case wrappedResp := <-n.appendEntriesResponseChan:
 				n.RaftMu.Lock()
 				grpcResponse := wrappedResp.Response
-				if grpcResponse != nil && n.CurrentTerm < grpcResponse.Term {
-					log.Printf("Leader %s %v term is less than follower %s, reverting to follower.", n.ID, n.CurrentTerm, wrappedResp.PeerID)
-					n.State = Follower
-					n.LeaderID = ""
-					n.CurrentTerm = grpcResponse.Term
+				if grpcResponse != nil && n.currentTerm < grpcResponse.Term {
+					log.Printf("Leader %s %v term is less than follower %s, reverting to follower.", n.ID, n.currentTerm, wrappedResp.PeerID)
+					n.state = Follower
+					n.leaderID = ""
+					n.currentTerm = grpcResponse.Term
 					go n.PersistRaftState()
 					n.StopReplicators()
 					n.ResetElectionTimeout()
@@ -303,33 +276,33 @@ func (n *Node) RunRaftLoop() {
 
 				if grpcResponse.Success {
 					log.Printf("Leader %s: Successfully replicated to nodes", n.ID)
-					if n.NextIndex[wrappedResp.PeerID] > 0 {
-						n.MatchIndex[wrappedResp.PeerID] = wrappedResp.PrevLogIndex + uint64(len(wrappedResp.SentEntries))
-						n.NextIndex[wrappedResp.PeerID] = wrappedResp.PrevLogIndex + uint64(len(wrappedResp.SentEntries)) + 1
+					if n.nextIndex[wrappedResp.PeerID] > 0 {
+						n.matchIndex[wrappedResp.PeerID] = wrappedResp.PrevLogIndex + uint64(len(wrappedResp.SentEntries))
+						n.nextIndex[wrappedResp.PeerID] = wrappedResp.PrevLogIndex + uint64(len(wrappedResp.SentEntries)) + 1
 					}
 				} else {
 					log.Printf("Node %s: Failed to replicate to follower", n.ID)
-					if n.NextIndex[wrappedResp.PeerID] > 1 {
-						n.NextIndex[wrappedResp.PeerID] -= 1
+					if n.nextIndex[wrappedResp.PeerID] > 1 {
+						n.nextIndex[wrappedResp.PeerID] -= 1
 					}
 				}
 				n.RaftMu.Unlock()
 				// Update Leader's Commit Index
-				for i := len(n.Log) - 1; i >= 0; i-- {
-					if n.CurrentTerm != n.Log[i].Term {
+				for i := len(n.log) - 1; i >= 0; i-- {
+					if n.currentTerm != n.log[i].Term {
 						break
 					}
 					majorityCount := 1
-					for _, peerID := range n.Peers {
-						if n.MatchIndex[peerID] >= uint64(i) {
+					for _, peerID := range n.peers {
+						if n.matchIndex[peerID] >= uint64(i) {
 							majorityCount++
 						}
 					}
-					if majorityCount >= len(n.Peers)/2+1 {
-						n.CommitIndex = uint64(i) + 1
-						log.Printf("Committed Index is %v", n.CommitIndex)
+					if majorityCount >= len(n.peers)/2+1 {
+						n.commitIndex = uint64(i) + 1
+						log.Printf("Committed Index is %v", n.commitIndex)
 						go n.PersistRaftState()
-						n.ApplierCond.Broadcast()
+						n.applierCond.Broadcast()
 						break
 					}
 				}
@@ -342,11 +315,11 @@ func (n *Node) RunRaftLoop() {
 				}
 				n.RaftMu.Lock()
 				entry := &LogEntry{
-					Term:    n.CurrentTerm,
-					Index:   uint64(len(n.Log)) + 1,
+					Term:    n.currentTerm,
+					Index:   uint64(len(n.log)) + 1,
 					Command: commandBytes,
 				}
-				n.Log = append(n.Log, entry)
+				n.log = append(n.log, entry)
 
 				go n.PersistRaftState()
 				n.RaftMu.Unlock()
@@ -355,40 +328,40 @@ func (n *Node) RunRaftLoop() {
 		case Candidate:
 			log.Printf("------------------------Candidate---------------------------------")
 			select {
-			case <-n.Ctx.Done():
+			case <-n.ctx.Done():
 				log.Printf("Candidate %s: Shutting down", n.ID)
 				return
-			case <-n.ElectionTimeout.Chan():
+			case <-n.electionTimeout.Chan():
 				n.RaftMu.Lock()
 				log.Printf("Candidate - Election timeout")
 
-				n.CurrentTerm += 1
-				n.VotedFor = n.ID
-				n.VotesReceived = make(map[string]bool)
-				n.VotesReceived[n.ID] = true
+				n.currentTerm += 1
+				n.votedFor = n.ID
+				n.votesReceived = make(map[string]bool)
+				n.votesReceived[n.ID] = true
 				go n.PersistRaftState()
 				n.ResetElectionTimeout()
 				n.RaftMu.Unlock()
 
-				for _, peerID := range n.Peers {
+				for _, peerID := range n.peers {
 					if peerID == n.ID {
 						continue
 					}
 					log.Printf("%s", peerID)
 					go func(peerID string) {
 						n.RaftMu.Lock()
-						currentTerm := n.CurrentTerm
+						currentTerm := n.currentTerm
 						lastLogIndex := func() uint64 {
-							if len(n.Log) == 0 {
+							if len(n.log) == 0 {
 								return 0
 							}
-							return n.Log[len(n.Log)-1].Index
+							return n.log[len(n.log)-1].Index
 						}()
 						lastLogTerm := func() uint64 {
-							if len(n.Log) == 0 {
+							if len(n.log) == 0 {
 								return 0
 							}
-							return n.Log[len(n.Log)-1].Term
+							return n.log[len(n.log)-1].Term
 						}()
 						n.RaftMu.Unlock()
 
@@ -404,22 +377,22 @@ func (n *Node) RunRaftLoop() {
 							return
 						}
 						log.Printf("Vote Request Response: %v", response)
-						n.RequestVoteResponseChan <- response
+						n.requestVoteResponseChan <- response
 					}(peerID)
 				}
 
-			case aeWrapper := <-n.AppendEntriesChan:
-				log.Printf("Request received in AppendEntriesChan")
+			case aeWrapper := <-n.appendEntriesChan:
+				log.Printf("Request received in appendEntriesChan")
 				response, err := raftServer.ProcessAppendEntriesRequest(aeWrapper.Ctx, aeWrapper.Request)
 				if err != nil {
 					log.Printf("Error appending entries: %v", err)
 					if response == nil {
-						response = &AppendEntriesResponse{Term: n.CurrentTerm, Success: false}
+						response = &AppendEntriesResponse{Term: n.currentTerm, Success: false}
 					}
 				}
 				aeWrapper.Response <- response
 
-			case reqVoteReq := <-n.RequestVoteChan:
+			case reqVoteReq := <-n.requestVoteChan:
 				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
 				response, err := raftServer.ProcessVoteRequest(reqVoteReq.Ctx, reqVoteReq.Request)
 				if err != nil {
@@ -427,30 +400,30 @@ func (n *Node) RunRaftLoop() {
 				}
 				reqVoteReq.Response <- response
 
-			case reqVoteRespWrapper := <-n.RequestVoteResponseChan:
+			case reqVoteRespWrapper := <-n.requestVoteResponseChan:
 				raftServer.ReceiveVote(reqVoteRespWrapper)
 
 				n.RaftMu.Lock()
-				votesReceivedLen, peersLen := len(n.VotesReceived), len(n.Peers)
+				votesReceivedLen, peersLen := len(n.votesReceived), len(n.peers)
 
 				if uint64(votesReceivedLen) >= uint64(peersLen/2)+1 {
-					n.State = Leader
-					n.LeaderID = n.ID
-					n.NextIndex = make(map[string]uint64)
-					n.MatchIndex = make(map[string]uint64)
-					for _, peerID := range n.Peers {
+					n.state = Leader
+					n.leaderID = n.ID
+					n.nextIndex = make(map[string]uint64)
+					n.matchIndex = make(map[string]uint64)
+					for _, peerID := range n.peers {
 						if peerID == n.ID {
 							continue
 						}
-						n.NextIndex[peerID] = func() uint64 {
-							if len(n.Log) == 0 {
+						n.nextIndex[peerID] = func() uint64 {
+							if len(n.log) == 0 {
 								return 1
 							}
-							return n.Log[len(n.Log)-1].Index + 1
+							return n.log[len(n.log)-1].Index + 1
 						}()
-						n.MatchIndex[peerID] = 0
+						n.matchIndex[peerID] = 0
 					}
-					log.Printf("New Leader - %s. VotesReceived %v", n.ID, n.VotesReceived)
+					log.Printf("New Leader - %s. votesReceived %v", n.ID, n.votesReceived)
 					n.StartReplicators()
 				}
 				n.RaftMu.Unlock()
@@ -459,34 +432,34 @@ func (n *Node) RunRaftLoop() {
 		case Follower:
 			log.Printf("------------------------Follower---------------------------------")
 			select {
-			case <-n.Ctx.Done():
+			case <-n.ctx.Done():
 				log.Printf("Follower %s: Shutting down", n.ID)
 				return
-			case <-n.ElectionTimeout.Chan():
+			case <-n.electionTimeout.Chan():
 				log.Printf("Follower - Election timeout")
 				n.RaftMu.Lock()
-				n.State = Candidate
-				n.CurrentTerm += 1
-				n.VotedFor = n.ID
-				n.VotesReceived = make(map[string]bool)
-				n.VotesReceived[n.ID] = true
+				n.state = Candidate
+				n.currentTerm += 1
+				n.votedFor = n.ID
+				n.votesReceived = make(map[string]bool)
+				n.votesReceived[n.ID] = true
 				go n.PersistRaftState()
 				n.RaftMu.Unlock()
 
 				n.ResetElectionTimeout()
 
-			case aeReq := <-n.AppendEntriesChan:
-				log.Printf("Request received in AppendEntriesChan")
+			case aeReq := <-n.appendEntriesChan:
+				log.Printf("Request received in appendEntriesChan")
 				response, err := raftServer.ProcessAppendEntriesRequest(aeReq.Ctx, aeReq.Request)
 				if err != nil {
 					log.Printf("Error appending entries: %v", err)
 					if response == nil {
-						response = &AppendEntriesResponse{Term: n.CurrentTerm, Success: false}
+						response = &AppendEntriesResponse{Term: n.currentTerm, Success: false}
 					}
 				}
 				aeReq.Response <- response
 
-			case reqVoteReq := <-n.RequestVoteChan:
+			case reqVoteReq := <-n.requestVoteChan:
 				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
 				response, err := raftServer.ProcessVoteRequest(reqVoteReq.Ctx, reqVoteReq.Request)
 				if err != nil {
@@ -496,388 +469,4 @@ func (n *Node) RunRaftLoop() {
 			}
 		}
 	}
-}
-
-func (n *Node) StartReplicators() {
-	log.Printf("Starting replicators...")
-	n.ReplicatorCancel = make(map[string]context.CancelFunc)
-
-	for _, peerID := range n.Peers {
-		if n.ID == peerID {
-			continue
-		}
-		replicatorCtx, replicatorCancel := context.WithCancel(n.Ctx)
-		n.ReplicatorCancel[peerID] = replicatorCancel
-		n.ReplicatorWg.Add(1)
-		log.Printf("Leader %s: Starting replicator for peer %s", n.ID, peerID)
-		go n.ReplicateToFollower(replicatorCtx, peerID)
-	}
-}
-
-func (n *Node) StopReplicators() {
-	for _, replicatorCancel := range n.ReplicatorCancel {
-		replicatorCancel()
-	}
-	n.ReplicatorCancel = nil
-}
-
-func (n *Node) Shutdown() {
-	if n.Ctx != nil {
-		n.Cancel()
-	}
-	n.StopReplicators()
-	n.ApplierCond.Broadcast()
-}
-
-func (n *Node) WaitAllGoroutines() {
-	done := make(chan struct{})
-	go func() {
-		n.ApplierWg.Wait()
-		n.PersistWg.Wait()
-		n.RaftLoopWg.Wait()
-		n.ReplicatorWg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		log.Printf("Node %s: All follower goroutines stopped fully", n.ID)
-	case <-n.Clock.After(3 * time.Second):
-		log.Printf("Node %s: Timed out after 3 sec. Some goroutines may still be running", n.ID)
-	}
-}
-
-func (n *Node) ReplicateToFollower(stopCtx context.Context, followerID string) {
-	defer func() {
-		n.ReplicatorWg.Done()
-		log.Printf("Node %s: Replicator goroutine stopped", n.ID)
-	}()
-	retryTime := time.Millisecond * 50
-	maxRetryTime := time.Second * 2
-
-	for {
-		select {
-		case <-n.Ctx.Done():
-			log.Printf("Leader %s: ReplicateToFollower stopped", n.ID)
-			return
-		default:
-			n.RaftMu.Lock()
-			if n.State != Leader {
-				n.RaftMu.Unlock()
-				return
-			}
-			term, leaderID, commitIndex := n.CurrentTerm, n.LeaderID, n.CommitIndex
-			logSnapshot := make([]*LogEntry, len(n.Log))
-			copy(logSnapshot, n.Log)
-			peerNextIndex, ok := n.NextIndex[followerID]
-			if !ok {
-				peerNextIndex = 1
-			}
-			n.RaftMu.Unlock()
-			prevLogIndex, prevLogTerm := uint64(0), uint64(0)
-			if peerNextIndex > 1 {
-				if peerNextIndex-2 < uint64(len(logSnapshot)) {
-					prevLogIndex = peerNextIndex - 1
-					prevLogTerm = logSnapshot[peerNextIndex-2].Term
-				} else {
-					log.Print("Indexes out of bound. Resetting to prevLogIndex & prevLogTerm to 0")
-					prevLogIndex = 0
-					prevLogTerm = 0
-				}
-			}
-
-			entries := make([]*LogEntry, 0)
-
-			if peerNextIndex > 0 && peerNextIndex <= uint64(len(logSnapshot)) {
-				entries = logSnapshot[peerNextIndex-1:]
-			} else if len(logSnapshot) > 0 && peerNextIndex == 0 {
-				entries = logSnapshot
-			} else if len(logSnapshot) > 0 && peerNextIndex > uint64(len(logSnapshot)) {
-				entries = []*LogEntry{}
-			}
-
-			log.Printf("Leader %s: ReplicateToFollower sending logs to %v", leaderID, followerID)
-			response, err := n.Transport.SendAppendEntries(followerID, &AppendEntriesRequest{
-				Term:         term,
-				LeaderId:     leaderID,
-				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  prevLogTerm,
-				Entries:      entries,
-				LeaderCommit: commitIndex,
-			})
-			if err != nil {
-				log.Printf("Error appending raft log: %v", err)
-				retryTime = min(maxRetryTime, retryTime*2)
-				n.Clock.Sleep(retryTime)
-				continue
-			}
-			wrappedResp := &AppendEntriesResponseWrapper{
-				Response:     response,
-				Error:        err,
-				PeerID:       followerID,
-				PrevLogIndex: prevLogIndex,
-				SentEntries:  entries,
-			}
-			n.AppendEntriesResponseChan <- wrappedResp
-
-			retryTime = 50 * time.Millisecond
-			sleepDuration := 10 * time.Millisecond
-			if response.Success {
-				sleepDuration = 50 * time.Millisecond
-			}
-			n.RaftMu.Lock()
-			log.Printf("MatchIndex: %v, NextIndex: %v", n.MatchIndex[followerID], n.NextIndex[followerID])
-			log.Printf("Log: %v", n.Log)
-			log.Printf("Leader %s: Sleep %v", n.ID, sleepDuration)
-			n.RaftMu.Unlock()
-			n.Clock.Sleep(sleepDuration)
-		}
-	}
-}
-
-func (n *Node) ApplierGoroutine() {
-	defer func() {
-		log.Printf("Node %s: Applier goroutine stopped", n.ID)
-		n.ApplierWg.Done()
-	}()
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
-
-	for {
-		for n.CommitIndex <= n.LastApplied {
-			select {
-			case <-n.Ctx.Done():
-				log.Printf("Node %s: ApplierGoroutine stopped through Ctx.Done()", n.ID)
-				return
-			default:
-				n.ApplierCond.Wait()
-				log.Printf("CommitIndex: %v, LastApplied: %v", n.CommitIndex, n.LastApplied)
-			}
-		}
-
-		for n.LastApplied < n.CommitIndex {
-			log.Printf("Increasing n.LastApplied: %v", n.LastApplied)
-			n.LastApplied++
-			logEntry := n.Log[n.LastApplied-1]
-			var cmd Command
-			err := json.Unmarshal(logEntry.Command, &cmd)
-			if err != nil {
-				log.Fatalf("Error unmarshalling command: %v", err)
-			}
-
-			n.Data[cmd.Key] = cmd.Value
-			go n.PersistRaftState()
-			log.Printf("Node %s: PUT %s -> %s", n.ID, cmd.Key, string(cmd.Value))
-		}
-	}
-}
-
-func (n *Node) PersistStateGoroutine() {
-	defer func() {
-		n.PersistWg.Done()
-		log.Printf("Node %s: PersistStateGoroutine stopped", n.ID)
-	}()
-	for {
-		select {
-		case <-n.Ctx.Done():
-			log.Printf("Node %s: PersistStateGoroutine stopped through Ctx.Done()", n.ID)
-			return
-		case raftState, ok := <-n.PersistStateChan:
-			if !ok {
-				log.Printf("Leader %s: PersistStateGoroutine stopped through !ok", n.ID)
-				return
-			}
-			var buffer bytes.Buffer
-			encoder := gob.NewEncoder(&buffer)
-			if err := encoder.Encode(raftState); err != nil {
-				log.Fatalf("Error encoding saved state: %v", err)
-			}
-
-			filePath := filepath.Join(n.DataDir, "raft_state.gob")
-			tmpFilePath := filePath + ".tmp"
-
-			file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-			if err != nil {
-				log.Fatalf("Error opening file: %v", err)
-			}
-
-			if _, err := file.Write(buffer.Bytes()); err != nil {
-				log.Fatalf("error saving raft state: %v", err)
-			}
-			if err := file.Sync(); err != nil {
-				log.Fatalf("error saving raft state: %v", err)
-			}
-			if err := file.Close(); err != nil {
-				log.Fatalf("error closing file: %v", err)
-			}
-			if err := os.Rename(tmpFilePath, filePath); err != nil {
-				os.Remove(tmpFilePath)
-				log.Fatalf("error renaming saved state: %v", err)
-			}
-			log.Printf("Node %s: Saved to Raft State %s", n.ID, filePath)
-		}
-	}
-}
-
-func (n *Node) ResetElectionTimeout() {
-	durationMs := rand.Intn(maxElectionTimeoutMs-minElectionTimeoutMs+1) + minElectionTimeoutMs
-	timeout := time.Duration(durationMs) * time.Millisecond
-
-	if n.ElectionTimeout != nil {
-		n.ElectionTimeout.Stop()
-	}
-	n.ElectionTimeout = n.Clock.NewTimer(timeout)
-	log.Printf("Node %s: Election timeout set to %dms", n.ID, durationMs)
-}
-
-func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
-	log.Printf("Processing vote request...")
-	s.mainNode.RaftMu.Lock()
-	defer s.mainNode.RaftMu.Unlock()
-	if req.Term < s.mainNode.CurrentTerm {
-		return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: false, VoterId: s.mainNode.ID}, nil
-	}
-
-	if req.Term > s.mainNode.CurrentTerm {
-		s.mainNode.VotedFor = ""
-		s.mainNode.CurrentTerm = req.Term
-		s.mainNode.State = Follower
-		go s.mainNode.PersistRaftState()
-	}
-	s.mainNode.ResetElectionTimeout()
-	var lastLogTerm uint64 = 0
-	if len(s.mainNode.Log) > 0 {
-		lastLogTerm = s.mainNode.Log[len(s.mainNode.Log)-1].Term
-	}
-	var lastLogIndex uint64 = 0
-	if len(s.mainNode.Log) > 0 {
-		lastLogIndex = s.mainNode.Log[len(s.mainNode.Log)-1].Index
-	}
-
-	logOk := (req.LastLogTerm > lastLogTerm) ||
-		(req.LastLogTerm == lastLogTerm && req.LastLogIndex >= lastLogIndex)
-
-	if req.Term == s.mainNode.CurrentTerm && logOk && (s.mainNode.VotedFor == req.CandidateId || s.mainNode.VotedFor == "") {
-		s.mainNode.VotedFor = req.CandidateId
-		go s.mainNode.PersistRaftState()
-		return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: true, VoterId: s.mainNode.ID}, nil
-	}
-	return &RequestVoteResponse{Term: s.mainNode.CurrentTerm, VoteGranted: false, VoterId: s.mainNode.ID}, nil
-}
-
-func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
-	s.mainNode.RaftMu.Lock()
-	defer s.mainNode.RaftMu.Unlock()
-	candidateTerm, voterTerm, voteGranted := s.mainNode.CurrentTerm, req.Term, req.VoteGranted
-
-	if voterTerm > candidateTerm {
-		s.mainNode.VotedFor = ""
-		s.mainNode.CurrentTerm = voterTerm
-		s.mainNode.State = Follower
-		s.mainNode.VotesReceived = make(map[string]bool)
-		s.mainNode.ResetElectionTimeout()
-		go s.mainNode.PersistRaftState()
-
-		return
-	}
-
-	if candidateTerm == voterTerm && voteGranted {
-		s.mainNode.VotesReceived[req.VoterId] = true
-		log.Printf("Node %s: Received vote from %s. Total of %v votes", s.mainNode.ID, req.VoterId, len(s.mainNode.VotesReceived))
-		log.Printf("Node %v", s.mainNode.VotesReceived)
-	}
-}
-
-func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
-	log.Printf("Processing AppendEntries Request...")
-	s.mainNode.RaftMu.Lock()
-	defer s.mainNode.RaftMu.Unlock()
-
-	// 1. Reply false if term < currentTerm (§5.1)
-	if req.Term < s.mainNode.CurrentTerm {
-		return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
-	}
-
-	if req.Term > s.mainNode.CurrentTerm {
-		s.mainNode.VotedFor = ""
-		s.mainNode.CurrentTerm = req.Term
-		s.mainNode.State = Follower
-		s.mainNode.VotesReceived = make(map[string]bool)
-		go s.mainNode.PersistRaftState()
-	}
-
-	s.mainNode.ResetElectionTimeout()
-	s.mainNode.LeaderID = req.LeaderId
-
-	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-	if req.PrevLogIndex > uint64(len(s.mainNode.Log)) {
-		log.Printf("Missing entries in the %s's log, append canceled from %s", req.GetLeaderId(), s.mainNode.ID)
-		return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
-	}
-	if req.PrevLogIndex > 0 && req.GetPrevLogTerm() != s.mainNode.Log[req.PrevLogIndex-1].Term {
-		log.Printf("PrevLogTerm of receiver %s doesn't match PrevLogTerm of sender %s", req.GetLeaderId(), s.mainNode.ID)
-		return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: false}, nil
-	}
-
-	// Find and truncate if a potential conflicting entry is found. Then append all entries
-	if len(req.Entries) == 0 {
-		log.Printf("Received heartbeat from leader %s", s.mainNode.LeaderID)
-	} else {
-		log.Printf("Entries: %v", req.Entries)
-	}
-	for i, entry := range req.Entries {
-		leaderIndex := req.PrevLogIndex + uint64(i) + 1
-
-		followerIndex := leaderIndex - 1
-		log.Printf("%v, %v", leaderIndex, followerIndex)
-		if followerIndex >= leaderIndex || leaderIndex > uint64(len(s.mainNode.Log)) {
-			s.mainNode.Log = append(s.mainNode.Log, req.Entries[i:]...)
-			go s.mainNode.PersistRaftState()
-			return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
-		}
-		if s.mainNode.Log[followerIndex].Term != entry.Term {
-			s.mainNode.Log = s.mainNode.Log[:followerIndex]
-			s.mainNode.Log = append(s.mainNode.Log, req.Entries[i:]...)
-			go s.mainNode.PersistRaftState()
-			return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
-		}
-	}
-
-	if req.LeaderCommit > s.mainNode.CommitIndex {
-		lastEntryIndex := uint64(0)
-		if len(s.mainNode.Log) > 0 {
-			lastEntryIndex = s.mainNode.Log[len(s.mainNode.Log)-1].Index
-		}
-		s.mainNode.CommitIndex = min(req.LeaderCommit, lastEntryIndex)
-		go s.mainNode.PersistRaftState()
-		s.mainNode.ApplierCond.Broadcast()
-	}
-	log.Printf("Current Log: %v", s.mainNode.Log)
-	return &AppendEntriesResponse{Term: s.mainNode.CurrentTerm, Success: true}, nil
-}
-
-func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
-	respChan := make(chan *AppendEntriesResponse, 1)
-	wrapper := &AppendEntriesRequestWrapper{
-		Ctx:      ctx,
-		Request:  req,
-		Response: respChan,
-	}
-	s.mainNode.AppendEntriesChan <- wrapper
-
-	resp := <-respChan
-	return resp, nil
-}
-
-func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
-	respChan := make(chan *RequestVoteResponse, 1)
-	wrapper := &RequestVoteRequestWrapper{
-		Ctx:      ctx,
-		Request:  req,
-		Response: respChan,
-	}
-	s.mainNode.RequestVoteChan <- wrapper
-
-	resp := <-respChan
-	return resp, nil
 }

@@ -1,0 +1,115 @@
+package cluster
+
+import (
+	"bytes"
+	"encoding/gob"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+)
+
+func (n *Node) PersistRaftState() {
+	n.RaftMu.Lock()
+	logCopy := make([]*LogEntry, len(n.log))
+	copy(logCopy, n.log)
+
+	savedState := &PersistentState{
+		CurrentTerm: n.currentTerm,
+		VotedFor:    n.votedFor,
+		Log:         logCopy,
+		CommitIndex: n.commitIndex,
+		LastApplied: n.lastApplied,
+	}
+	n.RaftMu.Unlock()
+
+	n.persistStateChan <- savedState
+}
+
+func (n *Node) LoadRaftState() error {
+	filePath := filepath.Join(n.dataDir, "raft_state.gob")
+	info, err := os.Stat(filePath)
+
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("Raft state file not found for n %s", n.ID)
+			return nil
+		}
+		return fmt.Errorf("error stating raft state file %s", filePath)
+	}
+
+	if info.Size() == 0 {
+		log.Printf("Node %s: Raft State File Empty", n.ID)
+		return nil
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("raft state file not found for n %s", n.ID)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Error closing file: %v", err)
+		}
+	}()
+	decoder := gob.NewDecoder(file)
+	var savedState PersistentState
+	if err := decoder.Decode(&savedState); err != nil {
+		return fmt.Errorf("error decoding raft state: %v", err)
+	}
+	log.Printf("Saved State: %v", savedState)
+	n.RaftMu.Lock()
+	n.currentTerm = savedState.CurrentTerm
+	n.votedFor = savedState.VotedFor
+	n.log = savedState.Log
+	n.commitIndex = savedState.CommitIndex
+	n.RaftMu.Unlock()
+	return nil
+}
+
+func (n *Node) PersistStateGoroutine() {
+	defer func() {
+		n.persistWg.Done()
+		log.Printf("Node %s: PersistStateGoroutine stopped", n.ID)
+	}()
+	for {
+		select {
+		case <-n.ctx.Done():
+			log.Printf("Node %s: PersistStateGoroutine stopped through ctx.Done()", n.ID)
+			return
+		case raftState, ok := <-n.persistStateChan:
+			if !ok {
+				log.Printf("Leader %s: PersistStateGoroutine stopped through !ok", n.ID)
+				return
+			}
+			var buffer bytes.Buffer
+			encoder := gob.NewEncoder(&buffer)
+			if err := encoder.Encode(raftState); err != nil {
+				log.Fatalf("Error encoding saved state: %v", err)
+			}
+
+			filePath := filepath.Join(n.dataDir, "raft_state.gob")
+			tmpFilePath := filePath + ".tmp"
+
+			file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+			if err != nil {
+				log.Fatalf("Error opening file: %v", err)
+			}
+
+			if _, err := file.Write(buffer.Bytes()); err != nil {
+				log.Fatalf("error saving raft state: %v", err)
+			}
+			if err := file.Sync(); err != nil {
+				log.Fatalf("error saving raft state: %v", err)
+			}
+			if err := file.Close(); err != nil {
+				log.Fatalf("error closing file: %v", err)
+			}
+			if err := os.Rename(tmpFilePath, filePath); err != nil {
+				os.Remove(tmpFilePath)
+				log.Fatalf("error renaming saved state: %v", err)
+			}
+			log.Printf("Node %s: Saved to Raft State %s", n.ID, filePath)
+		}
+	}
+}
