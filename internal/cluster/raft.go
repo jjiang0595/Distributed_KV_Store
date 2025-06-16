@@ -76,6 +76,7 @@ type Node struct {
 	persistStateChan          chan *PersistentState
 	requestVoteChan           chan *RequestVoteRequestWrapper
 	requestVoteResponseChan   chan *RequestVoteResponse
+	resetElectionTimeoutChan  chan struct{}
 
 	applierCond *sync.Cond
 
@@ -156,6 +157,7 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		persistStateChan:          make(chan *PersistentState, 1),
 		requestVoteChan:           make(chan *RequestVoteRequestWrapper),
 		requestVoteResponseChan:   make(chan *RequestVoteResponse),
+		resetElectionTimeoutChan:  make(chan struct{}, 1),
 		ctx:                       ctx,
 		cancel:                    cancel,
 		Clock:                     clk,
@@ -208,14 +210,13 @@ func (n *Node) WaitAllGoroutines() {
 	}
 }
 
-func (n *Node) ResetElectionTimeout() {
+func (n *Node) resetElectionTimeout() {
 	durationMs := rand.Intn(maxElectionTimeoutMs-minElectionTimeoutMs+1) + minElectionTimeoutMs
 	timeout := time.Duration(durationMs) * time.Millisecond
 
 	if n.electionTimeout != nil {
 		n.electionTimeout.Stop()
 	}
-	n.RaftMu.Lock()
 	n.electionTimeout = n.Clock.NewTimer(timeout)
 	log.Printf("Node %s: Election timeout set to %dms", n.ID, durationMs)
 }
@@ -242,7 +243,7 @@ func (n *Node) RunRaftLoop() {
 		}
 	}()
 
-	n.ResetElectionTimeout()
+	n.resetElectionTimeout()
 	n.startWg.Done()
 	for {
 		n.RaftMu.Lock()
@@ -259,6 +260,10 @@ func (n *Node) RunRaftLoop() {
 			case <-n.ctx.Done():
 				log.Printf("Leader %s: Shutting down", n.ID)
 				return
+			case <-n.resetElectionTimeoutChan:
+				n.RaftMu.Lock()
+				n.resetElectionTimeout()
+				n.RaftMu.Unlock()
 			case wrappedResp := <-n.appendEntriesResponseChan:
 				n.RaftMu.Lock()
 				grpcResponse := wrappedResp.Response
@@ -269,7 +274,12 @@ func (n *Node) RunRaftLoop() {
 					n.currentTerm = grpcResponse.Term
 					go n.PersistRaftState()
 					n.StopReplicators()
-					n.ResetElectionTimeout()
+					select {
+					case n.resetElectionTimeoutChan <- struct{}{}:
+						log.Printf("Candidate - Election timeout")
+					default:
+						log.Printf("Election timeout channel full")
+					}
 					n.RaftMu.Unlock()
 					continue
 				}
@@ -331,16 +341,23 @@ func (n *Node) RunRaftLoop() {
 			case <-n.ctx.Done():
 				log.Printf("Candidate %s: Shutting down", n.ID)
 				return
+			case <-n.resetElectionTimeoutChan:
+				n.RaftMu.Lock()
+				n.resetElectionTimeout()
+				n.RaftMu.Unlock()
 			case <-n.electionTimeout.Chan():
 				n.RaftMu.Lock()
-				log.Printf("Candidate - Election timeout")
-
 				n.currentTerm += 1
 				n.votedFor = n.ID
 				n.votesReceived = make(map[string]bool)
 				n.votesReceived[n.ID] = true
 				go n.PersistRaftState()
-				n.ResetElectionTimeout()
+				select {
+				case n.resetElectionTimeoutChan <- struct{}{}:
+					log.Printf("Candidate - Election timeout")
+				default:
+					log.Printf("Election timeout channel full")
+				}
 				n.RaftMu.Unlock()
 
 				for _, peerID := range n.peers {
@@ -435,6 +452,10 @@ func (n *Node) RunRaftLoop() {
 			case <-n.ctx.Done():
 				log.Printf("Follower %s: Shutting down", n.ID)
 				return
+			case <-n.resetElectionTimeoutChan:
+				n.RaftMu.Lock()
+				n.resetElectionTimeout()
+				n.RaftMu.Unlock()
 			case <-n.electionTimeout.Chan():
 				log.Printf("Follower - Election timeout")
 				n.RaftMu.Lock()
@@ -446,7 +467,12 @@ func (n *Node) RunRaftLoop() {
 				go n.PersistRaftState()
 				n.RaftMu.Unlock()
 
-				n.ResetElectionTimeout()
+				select {
+				case n.resetElectionTimeoutChan <- struct{}{}:
+					log.Printf("Candidate - Election timeout")
+				default:
+					log.Printf("Election timeout channel full")
+				}
 
 			case aeReq := <-n.appendEntriesChan:
 				log.Printf("Request received in appendEntriesChan")

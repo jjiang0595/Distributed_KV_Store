@@ -23,7 +23,12 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		go s.mainNode.PersistRaftState()
 	}
 
-	s.mainNode.ResetElectionTimeout()
+	select {
+	case s.mainNode.resetElectionTimeoutChan <- struct{}{}:
+		log.Printf("Sending Resetting Election timeout")
+	default:
+		log.Printf("Election timeout channel full")
+	}
 	s.mainNode.leaderID = req.LeaderId
 
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
@@ -87,7 +92,12 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 		s.mainNode.state = Follower
 		go s.mainNode.PersistRaftState()
 	}
-	s.mainNode.ResetElectionTimeout()
+	select {
+	case s.mainNode.resetElectionTimeoutChan <- struct{}{}:
+		log.Printf("Sending Resetting Election timeout")
+	default:
+		log.Printf("Election timeout channel full")
+	}
 	var lastLogTerm uint64 = 0
 	if len(s.mainNode.log) > 0 {
 		lastLogTerm = s.mainNode.log[len(s.mainNode.log)-1].Term
@@ -118,7 +128,12 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 		s.mainNode.currentTerm = voterTerm
 		s.mainNode.state = Follower
 		s.mainNode.votesReceived = make(map[string]bool)
-		s.mainNode.ResetElectionTimeout()
+		select {
+		case s.mainNode.resetElectionTimeoutChan <- struct{}{}:
+			log.Printf("Sending Resetting Election timeout")
+		default:
+			log.Printf("Election timeout channel full")
+		}
 		go s.mainNode.PersistRaftState()
 
 		return
