@@ -103,16 +103,16 @@ func main() {
 			defer r.Body.Close()
 
 			node.RaftMu.Lock()
-			leaderId := node.LeaderID
+			leaderId := node.GetLeaderID()
 			node.RaftMu.Unlock()
-			switch node.State {
+			switch node.GetState() {
 			case cluster.Leader:
 				putCmd := &cluster.Command{
 					Type:  cluster.CommandPut,
 					Key:   key,
 					Value: body,
 				}
-				log.Printf("Sending to ClientCommandChan %v...", node.ClientCommandChan)
+				log.Printf("Sending to clientCommandChan %v...", node.ClientCommandChan)
 				node.ClientCommandChan <- putCmd
 				w.WriteHeader(http.StatusCreated)
 				_, err := fmt.Fprintf(w, "Sent a PUT request for %s", key)
@@ -133,7 +133,7 @@ func main() {
 
 			node.RaftMu.Lock()
 			defer node.RaftMu.Unlock()
-			if _, ok := node.Data[key]; !ok {
+			if _, ok := node.GetData()[key]; !ok {
 				w.WriteHeader(http.StatusNotFound)
 				_, err := fmt.Fprintf(w, "Key %s not found", key)
 				if err != nil {
@@ -142,7 +142,7 @@ func main() {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			_, err := w.Write(node.Data[key])
+			_, err := w.Write(node.GetData()[key])
 			if err != nil {
 				fmt.Printf("Error writing response: %v", err)
 				return
@@ -162,5 +162,6 @@ func main() {
 	log.Printf("Received signal: %v", sig)
 
 	node.Shutdown()
+	node.WaitAllGoroutines()
 	os.Exit(0)
 }

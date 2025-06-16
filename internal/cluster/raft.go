@@ -56,39 +56,39 @@ type Node struct {
 	// Raft
 	RaftMu sync.Mutex
 
-	Peers            []string
-	CurrentTerm      uint64            // Latest term server
-	VotedFor         string            // Candidate ID that the node voted for
-	Log              []*LogEntry       // Replicated messages log
-	CommitIndex      uint64            // Index of highest entry that was known to be committed
-	State            RaftState         // Leader, Candidate, Follower
-	LastApplied      uint64            // Highest index that was applied to state machine (data)
-	LeaderID         string            // Current leader's ID, default ""
-	VotesReceived    map[string]bool   // Set of node IDs that the candidate has received votes from
-	NextIndex        map[string]uint64 // (Leader) The next index that the leader will send to a follower
-	MatchIndex       map[string]uint64 // (Leader) The index that the leader has already replicated its logs up to
-	ElectionTimeout  clockwork.Timer   // Election timer that triggers if no gRPC response is heard from leader
-	HeartbeatTimeout clockwork.Timer
+	peers            []string
+	currentTerm      uint64            // Latest term server
+	votedFor         string            // Candidate ID that the node voted for
+	log              []*LogEntry       // Replicated messages log
+	commitIndex      uint64            // Index of highest entry that was known to be committed
+	state            RaftState         // Leader, Candidate, Follower
+	lastApplied      uint64            // Highest index that was applied to state machine (data)
+	leaderID         string            // Current leader's ID, default ""
+	votesReceived    map[string]bool   // Set of node IDs that the candidate has received votes from
+	nextIndex        map[string]uint64 // (Leader) The next index that the leader will send to a follower
+	matchIndex       map[string]uint64 // (Leader) The index that the leader has already replicated its logs up to
+	electionTimeout  clockwork.Timer   // Election timer that triggers if no gRPC response is heard from leader
+	heartbeatTimeout clockwork.Timer
 
-	AppendEntriesChan         chan *AppendEntriesRequestWrapper
-	AppendEntriesResponseChan chan *AppendEntriesResponseWrapper
+	appendEntriesChan         chan *AppendEntriesRequestWrapper
+	appendEntriesResponseChan chan *AppendEntriesResponseWrapper
 	ClientCommandChan         chan *Command
-	PersistStateChan          chan *PersistentState
-	RequestVoteChan           chan *RequestVoteRequestWrapper
-	RequestVoteResponseChan   chan *RequestVoteResponse
+	persistStateChan          chan *PersistentState
+	requestVoteChan           chan *RequestVoteRequestWrapper
+	requestVoteResponseChan   chan *RequestVoteResponse
 
-	ApplierCond *sync.Cond
+	applierCond *sync.Cond
 
-	Ctx              context.Context
-	Cancel           context.CancelFunc
-	ReplicatorCancel map[string]context.CancelFunc
+	ctx              context.Context
+	cancel           context.CancelFunc
+	replicatorCancel map[string]context.CancelFunc
 
 	// WaitGroups
-	ApplierWg    sync.WaitGroup
-	RaftLoopWg   sync.WaitGroup
-	PersistWg    sync.WaitGroup
-	ReplicatorWg sync.WaitGroup
-	StartWg      sync.WaitGroup
+	applierWg    sync.WaitGroup
+	raftLoopWg   sync.WaitGroup
+	persistWg    sync.WaitGroup
+	replicatorWg sync.WaitGroup
+	startWg      sync.WaitGroup
 
 	Clock     clockwork.Clock
 	Transport NetworkTransport
@@ -129,35 +129,35 @@ func NewRaftServer(mainNode *Node) *RaftServer {
 	}
 }
 
-func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address string, Port int, GrpcPort int, DataDir string, peerIDs []string, clk clockwork.Clock, t NetworkTransport) *Node {
+func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address string, Port int, GrpcPort int, dataDir string, peerIDs []string, clk clockwork.Clock, t NetworkTransport) *Node {
 	node := &Node{
 		ID:                        ID,
 		Address:                   Address,
 		Port:                      Port,
 		GrpcPort:                  GrpcPort,
-		Data:                      make(map[string][]byte),
-		VotedFor:                  "",
-		Peers:                     peerIDs,
-		CurrentTerm:               0,
-		DataDir:                   DataDir,
+		data:                      make(map[string][]byte),
+		votedFor:                  "",
+		peers:                     peerIDs,
+		currentTerm:               0,
+		dataDir:                   dataDir,
 		RaftMu:                    sync.Mutex{},
-		Log:                       make([]*LogEntry, 0),
-		CommitIndex:               0,
-		State:                     Follower,
-		LastApplied:               0,
-		LeaderID:                  "",
-		VotesReceived:             make(map[string]bool),
-		NextIndex:                 make(map[string]uint64),
-		MatchIndex:                make(map[string]uint64),
-		ElectionTimeout:           nil,
-		AppendEntriesChan:         make(chan *AppendEntriesRequestWrapper),
-		AppendEntriesResponseChan: make(chan *AppendEntriesResponseWrapper),
+		log:                       make([]*LogEntry, 0),
+		commitIndex:               0,
+		state:                     Follower,
+		lastApplied:               0,
+		leaderID:                  "",
+		votesReceived:             make(map[string]bool),
+		nextIndex:                 make(map[string]uint64),
+		matchIndex:                make(map[string]uint64),
+		electionTimeout:           nil,
+		appendEntriesChan:         make(chan *AppendEntriesRequestWrapper),
+		appendEntriesResponseChan: make(chan *AppendEntriesResponseWrapper),
 		ClientCommandChan:         make(chan *Command, 1),
-		PersistStateChan:          make(chan *PersistentState, 1),
-		RequestVoteChan:           make(chan *RequestVoteRequestWrapper),
-		RequestVoteResponseChan:   make(chan *RequestVoteResponse),
-		Ctx:                       ctx,
-		Cancel:                    cancel,
+		persistStateChan:          make(chan *PersistentState, 1),
+		requestVoteChan:           make(chan *RequestVoteRequestWrapper),
+		requestVoteResponseChan:   make(chan *RequestVoteResponse),
+		ctx:                       ctx,
+		cancel:                    cancel,
 		Clock:                     clk,
 		Transport:                 t,
 	}
