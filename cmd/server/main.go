@@ -67,9 +67,11 @@ func main() {
 		log.Fatal(err)
 	}
 
+	peerHttpAddresses := make(map[string]string)
 	peerAddresses := make(map[string]string)
 	peerIDs := make([]string, 0)
 	for _, peer := range cfg.Cluster.Peers {
+		peerHttpAddresses[peer.ID] = fmt.Sprintf("%s:%d", peer.Address, peer.Port)
 		if peer.ID == cfg.Node.ID {
 			continue
 		}
@@ -102,9 +104,7 @@ func main() {
 			}
 			defer r.Body.Close()
 
-			node.RaftMu.Lock()
 			leaderId := node.GetLeaderID()
-			node.RaftMu.Unlock()
 			switch node.GetState() {
 			case cluster.Leader:
 				putCmd := &cluster.Command{
@@ -124,7 +124,7 @@ func main() {
 					w.WriteHeader(http.StatusServiceUnavailable)
 					return
 				}
-				http.Redirect(w, r, fmt.Sprintf("http://%s/%s", peerAddresses[leaderId], key), http.StatusTemporaryRedirect)
+				http.Redirect(w, r, fmt.Sprintf("http://%s/%s", peerHttpAddresses[leaderId], key), http.StatusTemporaryRedirect)
 				return
 			}
 
