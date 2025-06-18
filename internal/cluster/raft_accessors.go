@@ -7,7 +7,7 @@ func (n *Node) GetData() map[string][]byte {
 	for k, v := range n.data {
 		dataCopy[k] = v
 	}
-	return n.data
+	return dataCopy
 }
 
 func (n *Node) GetPeers() []string {
