@@ -121,7 +121,13 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 
 	if req.Term == s.mainNode.currentTerm && logOk && (s.mainNode.votedFor == req.CandidateId || s.mainNode.votedFor == "") {
 		s.mainNode.votedFor = req.CandidateId
-		go s.mainNode.PersistRaftState()
+		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
+		select {
+		case s.mainNode.resetElectionTimeoutChan <- struct{}{}:
+			log.Printf("Candidate %s: Election timeout", s.mainNode.ID)
+		default:
+			log.Printf("Election timeout channel full")
+		}
 		return &RequestVoteResponse{Term: s.mainNode.currentTerm, VoteGranted: true, VoterId: s.mainNode.ID}, nil
 	}
 	return &RequestVoteResponse{Term: s.mainNode.currentTerm, VoteGranted: false, VoterId: s.mainNode.ID}, nil
@@ -162,10 +168,20 @@ func (s *RaftServer) AppendEntries(ctx context.Context, req *AppendEntriesReques
 		Request:  req,
 		Response: respChan,
 	}
-	s.mainNode.appendEntriesChan <- wrapper
 
-	resp := <-respChan
-	return resp, nil
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case s.mainNode.appendEntriesChan <- wrapper:
+		log.Printf("Node %s: Sent AppendEntries wrapper to RPC handler at time %v", req.LeaderId, s.mainNode.Clock.Now())
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case resp := <-respChan:
+		return resp, nil
+	}
 }
 
 func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
@@ -175,8 +191,18 @@ func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (
 		Request:  req,
 		Response: respChan,
 	}
-	s.mainNode.requestVoteChan <- wrapper
 
-	resp := <-respChan
-	return resp, nil
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case s.mainNode.requestVoteChan <- wrapper:
+		log.Printf("Node %s: Sent RequestVote wrapper to %s's RPC handler at time %v", req.CandidateId, s.mainNode.ID, s.mainNode.Clock.Now())
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case resp := <-respChan:
+		return resp, nil
+	}
 }
