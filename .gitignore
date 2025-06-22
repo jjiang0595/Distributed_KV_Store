@@ -22,3 +22,4 @@ go.work
 *.xml
 /.idea
 *.gob
+/internal/cluster/logs/
