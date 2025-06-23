@@ -391,51 +391,28 @@ func (n *Node) RunRaftLoop() {
 				n.votedFor = n.ID
 				n.votesReceived = make(map[string]bool)
 				n.votesReceived[n.ID] = true
-				go n.PersistRaftState()
-				select {
-				case n.resetElectionTimeoutChan <- struct{}{}:
-					log.Printf("Candidate - Election timeout")
-				default:
-					log.Printf("Election timeout channel full")
-				}
+				lastLogIndex := func() uint64 {
+					if len(n.log) == 0 {
+						return 0
+					}
+					return n.log[len(n.log)-1].Index
+				}()
+				lastLogTerm := func() uint64 {
+					if len(n.log) == 0 {
+						return 0
+					}
+					return n.log[len(n.log)-1].Term
+				}()
+				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
+				oldLogLength := len(n.log)
+				n.resetElectionTimeout()
+				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 				n.RaftMu.Unlock()
 
 				for _, peerID := range n.peers {
-					if peerID == n.ID {
-						continue
-					}
-					log.Printf("%s", peerID)
-					go func(peerID string) {
-						n.RaftMu.Lock()
-						currentTerm := n.currentTerm
-						lastLogIndex := func() uint64 {
-							if len(n.log) == 0 {
-								return 0
-							}
-							return n.log[len(n.log)-1].Index
-						}()
-						lastLogTerm := func() uint64 {
-							if len(n.log) == 0 {
-								return 0
-							}
-							return n.log[len(n.log)-1].Term
-						}()
-						n.RaftMu.Unlock()
-
-						voteRequest := &RequestVoteRequest{
-							Term:         currentTerm,
-							CandidateId:  n.ID,
-							LastLogIndex: lastLogIndex,
-							LastLogTerm:  lastLogTerm,
-						}
-						response, err := n.Transport.SendRequestVote(peerID, voteRequest)
-						if err != nil {
-							log.Printf("Error requesting vote: %v", err)
-							return
-						}
-						log.Printf("Vote Request Response: %v", response)
-						n.requestVoteResponseChan <- response
-					}(peerID)
+					voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*300)
+					n.raftLoopWg.Add(1)
+					go n.sendVoteRequestToPeer(voteCtx, voteCancel, peerID, n.currentTerm, lastLogIndex, lastLogTerm)
 				}
 
 			case aeWrapper := <-n.appendEntriesChan:
