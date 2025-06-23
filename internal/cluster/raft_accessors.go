@@ -3,9 +3,11 @@ package cluster
 func (n *Node) GetData() map[string][]byte {
 	n.RaftMu.Lock()
 	defer n.RaftMu.Unlock()
-	dataCopy := make(map[string][]byte)
+	dataCopy := make(map[string][]byte, len(n.data))
 	for k, v := range n.data {
-		dataCopy[k] = v
+		valueCopy := make([]byte, len(v))
+		copy(valueCopy, v)
+		dataCopy[k] = valueCopy
 	}
 	return dataCopy
 }
