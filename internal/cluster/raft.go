@@ -232,6 +232,33 @@ func (n *Node) resetElectionTimeout() {
 	}
 	n.electionTimeout = n.Clock.NewTimer(timeout)
 	log.Printf("Node %s: Election timeout set to %dms", n.ID, durationMs)
+
+func (n *Node) sendVoteRequestToPeer(voteCtx context.Context, voteCancel context.CancelFunc, peerID string, currentTerm uint64, lastLogIndex uint64, lastLogTerm uint64) {
+	defer voteCancel()
+	defer n.raftLoopWg.Done()
+
+	select {
+	case <-voteCtx.Done():
+		return
+	default:
+		voteRequest := &RequestVoteRequest{
+			Term:         currentTerm,
+			CandidateId:  n.ID,
+			LastLogIndex: lastLogIndex,
+			LastLogTerm:  lastLogTerm,
+		}
+		response, err := n.Transport.SendRequestVote(voteCtx, peerID, voteRequest)
+		if err != nil {
+			log.Printf("Error requesting vote: %v", err)
+			return
+		}
+		select {
+		case n.requestVoteResponseChan <- response:
+			log.Printf("Processing vote request response: %v, VoteGranted: %v", response, response.GetVoteGranted())
+		case <-voteCtx.Done():
+			return
+		}
+	}
 }
 
 func (n *Node) RunRaftLoop() {
