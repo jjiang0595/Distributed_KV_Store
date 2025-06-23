@@ -14,6 +14,30 @@ func newTestNode(t *testing.T, ctx context.Context, cancel context.CancelFunc, I
 	newNode.Start()
 	newNode.StartWg.Wait()
 	return newNode
+var globalLogFile *os.File
+
+func TestMain(m *testing.M) {
+	logDir, err := os.MkdirTemp("./logs", "raft_logs")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := os.RemoveAll(logDir); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	logFilePath := filepath.Join(logDir, "test.log")
+	globalLogFile, err = os.Create(logFilePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer globalLogFile.Close()
+	log.SetOutput(io.MultiWriter(os.Stdout, globalLogFile))
+	log.SetFlags(log.Ltime | log.Lmicroseconds | log.Lshortfile)
+
+	exitCode := m.Run()
+	os.Exit(exitCode)
 }
 
 func testSetup(t *testing.T) (context.Context, context.CancelFunc, map[string]*Node, *clockwork.FakeClock) {
