@@ -183,7 +183,17 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		Transport:                 t,
 		listenerFactory:           lf,
 	}
+	node.applierCond = sync.NewCond(&node.RaftMu)
+
+	node.grpcServer = grpc.NewServer()
+	node.raftServer = NewRaftServer(node)
+	RegisterRaftServiceServer(node.grpcServer, node.raftServer)
 	listener, err := node.listenerFactory(fmt.Sprintf(":%d", node.GrpcPort))
+	if err != nil {
+		log.Fatalf("Error listening on gRPC port %d: %v", node.GrpcPort, err)
+	}
+
+	node.grpcListener = listener
 	return node
 }
 
@@ -192,25 +202,45 @@ func (n *Node) Start() {
 	if err != nil {
 		log.Fatalf("Error loading raft state: %v", err)
 	}
-	n.startWg.Add(1)
-	n.applierWg.Add(1)
+
+	n.grpcWg.Add(1)
+	go func() {
+		defer func() {
+			n.grpcWg.Done()
+			log.Printf("Node %s: gRPC server stopped", n.ID)
+		}()
+		log.Printf("Listening on gRPC port %d", n.GrpcPort)
+		serveErr := n.grpcServer.Serve(n.grpcListener)
+		if serveErr != nil {
+			log.Printf("Error serving on gRPC port %d: %v", n.GrpcPort, serveErr)
+		}
+	}()
+
 	n.persistWg.Add(1)
-	n.raftLoopWg.Add(1)
-	go n.RunRaftLoop()
 	go n.PersistStateGoroutine()
 
-	n.applierCond = sync.NewCond(&n.RaftMu)
+	n.applierWg.Add(1)
 	go n.ApplierGoroutine()
-	n.applierCond.Broadcast()
+
+	n.raftLoopWg.Add(1)
+	go n.RunRaftLoop()
 }
 
 func (n *Node) Shutdown() {
 	log.Printf("Initializing shutdown for %s", n.ID)
+
 	if n.ctx != nil {
 		n.cancel()
 	}
+	if n.grpcServer != nil {
+		n.grpcServer.GracefulStop()
+	}
 	n.StopReplicators()
 	n.applierCond.Broadcast()
+
+	if n.grpcListener != nil {
+		n.grpcListener.Close()
+	}
 }
 
 func (n *Node) WaitAllGoroutines() {
@@ -220,6 +250,7 @@ func (n *Node) WaitAllGoroutines() {
 		n.persistWg.Wait()
 		n.raftLoopWg.Wait()
 		n.replicatorWg.Wait()
+		n.grpcWg.Wait()
 		close(done)
 	}()
 
@@ -276,24 +307,8 @@ func (n *Node) RunRaftLoop() {
 		log.Printf("Node %s: Raft Loop Goroutine stopped", n.ID)
 		n.raftLoopWg.Done()
 	}()
-	grpcServer := grpc.NewServer()
-	raftServer := NewRaftServer(n)
-	RegisterRaftServiceServer(grpcServer, raftServer)
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", n.GrpcPort))
-	if err != nil {
-		log.Fatalf("Error listening on gRPC port %d: %v", n.GrpcPort, err)
-	}
-
-	go func() {
-		log.Printf("Listening on gRPC port %d", n.GrpcPort)
-		serveErr := grpcServer.Serve(listener)
-		if serveErr != nil {
-			log.Fatalf("Error serving on gRPC port %d: %v", n.GrpcPort, serveErr)
-		}
-	}()
 
 	n.resetElectionTimeout()
-	n.startWg.Done()
 	for {
 		//log.Printf("Node %s: Current commitIndex: %v, Current Term: %v, Current Log: %v, Current lastApplied: %v", n.ID, n.commitIndex, n.currentTerm, n.log, n.lastApplied)
 		case Leader:
