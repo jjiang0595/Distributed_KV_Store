@@ -364,10 +364,12 @@ func (n *Node) RunRaftLoop() {
 							majorityCount++
 						}
 					}
-					if majorityCount >= len(n.peers)/2+1 {
+					log.Printf("Leader %s: Majority count: %d", n.ID, majorityCount)
+					if majorityCount >= (len(n.peers)+1)/2+1 {
+						n.RaftMu.Lock()
 						n.commitIndex = uint64(i) + 1
 						log.Printf("Committed Index is %v", n.commitIndex)
-						go n.PersistRaftState()
+						n.RaftMu.Unlock()
 						n.applierCond.Broadcast()
 						break
 					}
@@ -379,7 +381,6 @@ func (n *Node) RunRaftLoop() {
 					log.Printf("Error marshalling command to bytes: %v", err)
 					continue
 				}
-				n.RaftMu.Lock()
 				entry := &LogEntry{
 					Term:    n.GetCurrentTerm(),
 					Index:   uint64(len(n.GetLog())) + 1,
