@@ -35,6 +35,13 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 	}
 	s.mainNode.leaderID = req.LeaderId
 
+	if s.mainNode.state == Candidate {
+		s.mainNode.votedFor = ""
+		s.mainNode.votesReceived = make(map[string]bool)
+		s.mainNode.state = Follower
+		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
+	}
+
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if req.PrevLogIndex > uint64(len(s.mainNode.log)) {
 		log.Printf("Missing entries in the %s's log, append canceled from %s", req.GetLeaderId(), s.mainNode.ID)
