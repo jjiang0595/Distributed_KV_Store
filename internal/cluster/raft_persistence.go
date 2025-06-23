@@ -9,23 +9,6 @@ import (
 	"path/filepath"
 )
 
-func (n *Node) PersistRaftState() {
-	n.RaftMu.Lock()
-	logCopy := make([]*LogEntry, len(n.log))
-	copy(logCopy, n.log)
-
-	savedState := &PersistentState{
-		CurrentTerm: n.currentTerm,
-		VotedFor:    n.votedFor,
-		Log:         logCopy,
-		CommitIndex: n.commitIndex,
-		LastApplied: n.lastApplied,
-	}
-	n.RaftMu.Unlock()
-
-	n.persistStateChan <- savedState
-}
-
 func (n *Node) LoadRaftState() error {
 	filePath := filepath.Join(n.dataDir, "raft_state.gob")
 	info, err := os.Stat(filePath)
@@ -65,6 +48,45 @@ func (n *Node) LoadRaftState() error {
 	n.commitIndex = savedState.CommitIndex
 	n.RaftMu.Unlock()
 	return nil
+}
+
+
+func (n *Node) PersistRaftState() {
+	if !n.GetDirtyPersistenceState() {
+		return
+	}
+
+	n.RaftMu.Lock()
+	logCopy := make([]*LogEntry, 0, len(n.log))
+	for _, entry := range n.log {
+		if entry != nil {
+			entryCopy := &LogEntry{
+				Term:    entry.Term,
+				Index:   entry.Index,
+				Command: make([]byte, len(entry.Command)),
+			}
+			copy(entryCopy.Command, entry.Command)
+
+			logCopy = append(logCopy, entryCopy)
+		}
+	}
+
+	savedState := &PersistentState{
+		CurrentTerm: n.currentTerm,
+		VotedFor:    n.votedFor,
+		Log:         logCopy,
+	}
+	n.RaftMu.Unlock()
+
+	err := n.WriteToDisk(savedState)
+	n.RaftMu.Lock()
+	if err != nil {
+		log.Printf("PersistRaftState: Error writing saved state to disk: %v", err)
+	} else {
+		log.Printf("PersistRaftState: Saved state to disk")
+		n.dirtyPersistenceState = false
+	}
+	n.RaftMu.Unlock()
 }
 
 func (n *Node) WriteToDisk(savedState *PersistentState) error {
