@@ -33,8 +33,6 @@ type PersistentState struct {
 	CurrentTerm uint64
 	VotedFor    string
 	Log         []*LogEntry
-	CommitIndex uint64
-	LastApplied uint64
 }
 
 type Command struct {
