@@ -319,21 +319,23 @@ func (n *Node) RunRaftLoop() {
 				log.Printf("Leader %s: Shutting down", n.ID)
 				return
 			case wrappedResp := <-n.appendEntriesResponseChan:
+				log.Printf("Leader %s: Received the Append Entries Response %v", n.ID, wrappedResp)
 				n.RaftMu.Lock()
+				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
+				oldLogLength := len(n.log)
+
 				grpcResponse := wrappedResp.Response
 				if grpcResponse != nil && n.currentTerm < grpcResponse.Term {
 					log.Printf("Leader %s %v term is less than follower %s, reverting to follower.", n.ID, n.currentTerm, wrappedResp.PeerID)
 					n.state = Follower
 					n.leaderID = ""
 					n.currentTerm = grpcResponse.Term
-					go n.PersistRaftState()
+					n.votesReceived = make(map[string]bool)
+					n.votedFor = ""
+					n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 					n.StopReplicators()
-					select {
-					case n.resetElectionTimeoutChan <- struct{}{}:
-						log.Printf("Candidate - Election timeout")
-					default:
-						log.Printf("Election timeout channel full")
-					}
+					n.resetElectionTimeout()
+					log.Printf("Leader %s: Stepping down", n.ID)
 					n.RaftMu.Unlock()
 					continue
 				}
