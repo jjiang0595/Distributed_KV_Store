@@ -405,6 +405,7 @@ func (n *Node) RunRaftLoop() {
 				n.RaftMu.Lock()
 				n.resetElectionTimeout()
 				n.RaftMu.Unlock()
+
 			case <-n.electionTimeout.Chan():
 				n.RaftMu.Lock()
 				n.currentTerm += 1
@@ -437,7 +438,7 @@ func (n *Node) RunRaftLoop() {
 
 			case aeWrapper := <-n.appendEntriesChan:
 				log.Printf("Request received in appendEntriesChan")
-				response, err := raftServer.ProcessAppendEntriesRequest(aeWrapper.Ctx, aeWrapper.Request)
+				response, err := n.raftServer.ProcessAppendEntriesRequest(aeWrapper.Ctx, aeWrapper.Request)
 				if err != nil {
 					log.Printf("Error appending entries: %v", err)
 					if response == nil {
@@ -453,8 +454,8 @@ func (n *Node) RunRaftLoop() {
 				}
 
 			case reqVoteReq := <-n.requestVoteChan:
-				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
-				response, err := raftServer.ProcessVoteRequest(reqVoteReq.Ctx, reqVoteReq.Request)
+				log.Printf("Node %s received a vote request from %s at %v", n.ID, reqVoteReq.Request.CandidateId, n.Clock.Now())
+				response, err := n.raftServer.ProcessVoteRequest(reqVoteReq.Ctx, reqVoteReq.Request)
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
 				}
@@ -467,7 +468,7 @@ func (n *Node) RunRaftLoop() {
 				}
 
 			case reqVoteRespWrapper := <-n.requestVoteResponseChan:
-				raftServer.ReceiveVote(reqVoteRespWrapper)
+				n.raftServer.ReceiveVote(reqVoteRespWrapper)
 
 				n.RaftMu.Lock()
 				votesReceivedLen, peersLen := len(n.votesReceived), len(n.peers)
@@ -534,8 +535,7 @@ func (n *Node) RunRaftLoop() {
 				go n.sendVoteRequestToPeers(n.currentTerm, lastLogIndex, lastLogTerm)
 
 			case aeReq := <-n.appendEntriesChan:
-				log.Printf("Request received in appendEntriesChan")
-				response, err := raftServer.ProcessAppendEntriesRequest(aeReq.Ctx, aeReq.Request)
+				response, err := n.raftServer.ProcessAppendEntriesRequest(aeReq.Ctx, aeReq.Request)
 				if err != nil {
 					log.Printf("Error appending entries: %v", err)
 					if response == nil {
@@ -551,8 +551,8 @@ func (n *Node) RunRaftLoop() {
 				}
 
 			case reqVoteReq := <-n.requestVoteChan:
-				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
-				response, err := raftServer.ProcessVoteRequest(reqVoteReq.Ctx, reqVoteReq.Request)
+				//log.Printf("Node %s: Received a vote request from %s at time %v", n.ID, reqVoteReq.Request.CandidateId, n.Clock.Now())
+				response, err := n.raftServer.ProcessVoteRequest(reqVoteReq.Ctx, reqVoteReq.Request)
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
 				}
