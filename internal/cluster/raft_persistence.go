@@ -46,7 +46,6 @@ func (n *Node) LoadRaftState() error {
 	n.currentTerm = savedState.CurrentTerm
 	n.votedFor = savedState.VotedFor
 	n.log = savedState.Log
-	n.commitIndex = savedState.CommitIndex
 	n.RaftMu.Unlock()
 	return nil
 }
