@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func (n *Node) LoadRaftState() error {
@@ -50,6 +51,19 @@ func (n *Node) LoadRaftState() error {
 	return nil
 }
 
+func (n *Node) SendPersistRaftStateRequest(oldTerm uint64, oldVotedFor string, oldLogLength int) {
+	if !n.dirtyPersistenceState {
+		if oldTerm != n.currentTerm || oldVotedFor != n.votedFor || oldLogLength != len(n.log) {
+			n.dirtyPersistenceState = true
+			select {
+			case n.persistStateChan <- struct{}{}:
+				log.Printf("Persisting %s's state to persistent state...", n.ID)
+			default:
+				log.Printf("Persistence channel is full.")
+			}
+		}
+	}
+}
 
 func (n *Node) PersistRaftState() {
 	if !n.GetDirtyPersistenceState() {
@@ -121,23 +135,24 @@ func (n *Node) WriteToDisk(savedState *PersistentState) error {
 }
 
 func (n *Node) PersistStateGoroutine() {
+	ticker := n.Clock.NewTicker(50 * time.Millisecond)
 	defer func() {
 		n.persistWg.Done()
-		log.Printf("Node %s: PersistStateGoroutine stopped", n.ID)
 	}()
 	for {
 		select {
 		case <-n.ctx.Done():
 			log.Printf("Node %s: PersistStateGoroutine stopped through ctx.Done()", n.ID)
-			return
-		case raftState, ok := <-n.persistStateChan:
-			if !ok {
-				log.Printf("Leader %s: PersistStateGoroutine stopped through !ok", n.ID)
-				return
+			if n.GetDirtyPersistenceState() {
+				n.PersistRaftState()
 			}
 			return
+		case <-ticker.Chan():
+			if n.GetDirtyPersistenceState() {
+				n.PersistRaftState()
 			}
-			log.Printf("Node %s: Saved to Raft State %s", n.ID, filePath)
+		case <-n.persistStateChan:
+			n.PersistRaftState()
 		}
 	}
 }
