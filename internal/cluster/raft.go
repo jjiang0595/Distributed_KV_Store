@@ -386,10 +386,13 @@ func (n *Node) RunRaftLoop() {
 					Index:   uint64(len(n.GetLog())) + 1,
 					Command: commandBytes,
 				}
+				n.RaftMu.Lock()
+				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
+				oldLogLength := len(n.log)
 				n.log = append(n.log, entry)
-
-				go n.PersistRaftState()
+				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 				n.RaftMu.Unlock()
+
 				log.Printf("Node %s: Successfully appended log entry", n.ID)
 			}
 		case Candidate:
