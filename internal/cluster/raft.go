@@ -354,13 +354,13 @@ func (n *Node) RunRaftLoop() {
 				}
 				n.RaftMu.Unlock()
 				// Update Leader's Commit Index
-				for i := len(n.log) - 1; i >= 0; i-- {
-					if n.currentTerm != n.log[i].Term {
+				for i := len(n.GetLog()) - 1; i >= 0; i-- {
+					if n.GetCurrentTerm() != n.log[i].GetTerm() {
 						break
 					}
 					majorityCount := 1
 					for _, peerID := range n.peers {
-						if n.matchIndex[peerID] >= uint64(i) {
+						if n.GetMatchIndex()[peerID] >= uint64(i) {
 							majorityCount++
 						}
 					}
@@ -381,8 +381,8 @@ func (n *Node) RunRaftLoop() {
 				}
 				n.RaftMu.Lock()
 				entry := &LogEntry{
-					Term:    n.currentTerm,
-					Index:   uint64(len(n.log)) + 1,
+					Term:    n.GetCurrentTerm(),
+					Index:   uint64(len(n.GetLog())) + 1,
 					Command: commandBytes,
 				}
 				n.log = append(n.log, entry)
@@ -513,7 +513,7 @@ func (n *Node) RunRaftLoop() {
 				if err != nil {
 					log.Printf("Error appending entries: %v", err)
 					if response == nil {
-						response = &AppendEntriesResponse{Term: n.currentTerm, Success: false}
+						response = &AppendEntriesResponse{Term: n.GetCurrentTerm(), Success: false}
 					}
 				}
 				aeReq.Response <- response
