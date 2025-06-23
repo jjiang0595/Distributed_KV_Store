@@ -49,10 +49,17 @@ func testSetup(t *testing.T) (context.Context, context.CancelFunc, map[string]*N
 		nodeIDs[i] = fmt.Sprintf("node%d", i)
 	}
 
+	tempNodes := make(map[string]*Node)
+	for i := 0; i < 3; i++ {
+		newNode := NewNode(ctx, cancel, nodeIDs[i], "localhost:", 0, 0, t.TempDir(), filterSelfID(nodeIDs[i], nodeIDs), clk, MockListenerFactory, nil)
+		tempNodes[nodeIDs[i]] = newNode
+	}
+
 	testNodes := make(map[string]*Node)
 	for i := 0; i < 3; i++ {
-		mockTransport := NewMockNetworkTransport(nodeIDs[i], testNodes)
-		newNode := newTestNode(t, ctx, cancel, nodeIDs[i], "localhost:", 0, 0, t.TempDir(), filterSelfID(nodeIDs[i], nodeIDs), clk, mockTransport)
+		mockTransport := NewMockNetworkTransport(ctx, nodeIDs[i], tempNodes)
+		newNode := tempNodes[nodeIDs[i]]
+		newNode.Transport = mockTransport
 		testNodes[nodeIDs[i]] = newNode
 	}
 
