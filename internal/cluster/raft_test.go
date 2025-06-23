@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-func newTestNode(t *testing.T, ctx context.Context, cancel context.CancelFunc, ID string, Address string, Port int, GrpcPort int, DataDir string, peerIDs []string, clk clockwork.Clock, transport NetworkTransport) *Node {
-	newNode := NewNode(ctx, cancel, ID, Address, Port, GrpcPort, DataDir, peerIDs, clk, transport)
-	newNode.Start()
-	newNode.StartWg.Wait()
-	return newNode
 var globalLogFile *os.File
 
 func TestMain(m *testing.M) {
