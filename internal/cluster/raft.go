@@ -444,7 +444,13 @@ func (n *Node) RunRaftLoop() {
 						response = &AppendEntriesResponse{Term: n.currentTerm, Success: false}
 					}
 				}
-				aeWrapper.Response <- response
+				select {
+				case <-n.ctx.Done():
+					log.Printf("Candidate %s: Parent Context is Cancelled", n.ID)
+					return
+				case aeWrapper.Response <- response:
+					log.Printf("Processing AppendEntries Response: %v", response)
+				}
 
 			case reqVoteReq := <-n.requestVoteChan:
 				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
@@ -452,7 +458,13 @@ func (n *Node) RunRaftLoop() {
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
 				}
-				reqVoteReq.Response <- response
+				select {
+				case <-n.ctx.Done():
+					log.Printf("Candidate %s: Parent Context is Cancelled", n.ID)
+					return
+				case reqVoteReq.Response <- response:
+					log.Printf("Node %s: Sending Back Request Vote Response: %v %v at time %v", n.ID, response, response.GetVoteGranted(), n.Clock.Now())
+				}
 
 			case reqVoteRespWrapper := <-n.requestVoteResponseChan:
 				raftServer.ReceiveVote(reqVoteRespWrapper)
@@ -520,7 +532,13 @@ func (n *Node) RunRaftLoop() {
 						response = &AppendEntriesResponse{Term: n.GetCurrentTerm(), Success: false}
 					}
 				}
-				aeReq.Response <- response
+				select {
+				case <-n.ctx.Done():
+					log.Printf("Follower %s: Parent Context is Cancelled", n.ID)
+					return
+				case aeReq.Response <- response:
+					log.Printf("Processing AppendEntries Request Response")
+				}
 
 			case reqVoteReq := <-n.requestVoteChan:
 				log.Printf("Node %s received a vote request from %s", n.ID, reqVoteReq.Request.CandidateId)
@@ -528,7 +546,13 @@ func (n *Node) RunRaftLoop() {
 				if err != nil {
 					log.Printf("Error requesting vote: %v", err)
 				}
-				reqVoteReq.Response <- response
+				select {
+				case <-n.ctx.Done():
+					log.Printf("Follower %s: Parent Context is Cancelled", n.ID)
+					return
+				case reqVoteReq.Response <- response:
+					log.Printf("Node %s: Sending Back Request Vote Response: %v %v at time %v", n.ID, response, response.GetVoteGranted(), n.Clock.Now())
+				}
 			}
 		}
 	}
