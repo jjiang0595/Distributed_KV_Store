@@ -62,7 +62,16 @@ func testSetup(t *testing.T) (context.Context, context.CancelFunc, map[string]*N
 		newNode.Transport = mockTransport
 		testNodes[nodeIDs[i]] = newNode
 	}
+	testNodesWg := sync.WaitGroup{}
+	for _, node := range testNodes {
+		testNodesWg.Add(1)
+		go func(n *Node) {
+			defer testNodesWg.Done()
+			n.Start()
+		}(node)
+	}
 
+	testNodesWg.Wait()
 	return ctx, cancel, testNodes, clk
 }
 
