@@ -231,7 +231,8 @@ func (n *Node) resetElectionTimeout() {
 		n.electionTimeout.Stop()
 	}
 	n.electionTimeout = n.Clock.NewTimer(timeout)
-	log.Printf("Node %s: Election timeout set to %dms", n.ID, durationMs)
+	//log.Printf("Node %s: Time now is %vms and election timeout is set to %dms", n.ID, n.Clock.Now(), durationMs)
+}
 
 func (n *Node) sendVoteRequestToPeer(voteCtx context.Context, voteCancel context.CancelFunc, peerID string, currentTerm uint64, lastLogIndex uint64, lastLogTerm uint64) {
 	defer voteCancel()
@@ -286,14 +287,7 @@ func (n *Node) RunRaftLoop() {
 	n.resetElectionTimeout()
 	n.startWg.Done()
 	for {
-		n.RaftMu.Lock()
-		currentState := n.state
-		log.Printf("Current data: %v", n.data)
-		log.Printf("Current Term: %v", n.currentTerm)
-		log.Printf("Current lastApplied: %v", n.lastApplied)
-		log.Printf("Current commitIndex: %v", n.commitIndex)
-		n.RaftMu.Unlock()
-		switch currentState {
+		//log.Printf("Node %s: Current commitIndex: %v, Current Term: %v, Current Log: %v, Current lastApplied: %v", n.ID, n.commitIndex, n.currentTerm, n.log, n.lastApplied)
 		case Leader:
 			log.Printf("------------------------Leader---------------------------------")
 			select {
