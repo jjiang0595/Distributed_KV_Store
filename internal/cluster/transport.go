@@ -11,8 +11,8 @@ import (
 )
 
 type NetworkTransport interface {
-	SendAppendEntries(peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error)
-	SendRequestVote(peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error)
+	SendAppendEntries(ctx context.Context, peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error)
+	SendRequestVote(ctx context.Context, peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error)
 	Close() error
 }
 
@@ -40,14 +40,11 @@ func NewGRPCTransport(peerAddresses map[string]string) (NetworkTransport, error)
 	return t, nil
 }
 
-func (t *gRPCTransport) SendAppendEntries(peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+func (t *gRPCTransport) SendAppendEntries(ctx context.Context, peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	client, ok := t.clients[peerID]
 	if !ok {
 		return nil, fmt.Errorf("invalid PeerID %s", peerID)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), t.rpcTimeout)
-	defer cancel()
 
 	resp, err := client.AppendEntries(ctx, req)
 	if err != nil {
@@ -56,14 +53,11 @@ func (t *gRPCTransport) SendAppendEntries(peerID string, req *AppendEntriesReque
 	return resp, nil
 }
 
-func (t *gRPCTransport) SendRequestVote(peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error) {
+func (t *gRPCTransport) SendRequestVote(ctx context.Context, peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error) {
 	client, ok := t.clients[peerID]
 	if !ok {
 		return nil, fmt.Errorf("invalid PeerID %s", peerID)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), t.rpcTimeout)
-	defer cancel()
 
 	res, err := client.RequestVote(ctx, req)
 	if err != nil {
