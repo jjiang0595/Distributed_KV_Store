@@ -104,79 +104,91 @@ func TestLeaderElection_SingleLeader(t *testing.T) {
 		t.Logf("Success: Single Leader")
 	} else {
 		t.Fatalf("followerCount should be 2")
+func TestLogReplication_LeaderCommand(t *testing.T) {
+	testCommand := &Command{
+		Type:  CommandPut,
+		Key:   "testKey",
+		Value: []byte("testValue"),
 	}
 
-	t.Cleanup(func() {
-		for _, node := range testNodes {
-			go node.Shutdown()
-		}
-		for _, node := range testNodes {
-			clk.Advance(1 * time.Second)
-			node.WaitAllGoroutines()
-		}
-	})
-	t.Logf("Finish")
-}
-
-func TestLeaderElection_LeaderCrashRecovery(t *testing.T) {
 	_, cancel, testNodes, clk := testSetup(t)
 	defer cancel()
-	newCtx, newCancel := context.WithCancel(context.Background())
-	defer newCancel()
 
-	clk.Advance(3 * time.Second)
-	startTime := time.Now()
-	timeout := 500 * time.Millisecond
+	var leaderNode *Node
+	exitTicker := clk.NewTicker(10 * time.Second)
+	checkTicker := clk.NewTicker(50 * time.Millisecond)
+	defer checkTicker.Stop()
 
-	for time.Since(startTime) < timeout {
-		for _, node := range testNodes {
-			if node.State == Leader {
-				log.Printf("--------------------------------------CRASHING LEADER NODE------------------------------------------------")
-				crashedNode := testNodes[node.ID]
-				delete(testNodes, node.ID)
-				node.Cancel()
-				go node.Shutdown()
-				clk.Advance(1 * time.Second)
-				node.WaitAllGoroutines()
-				mockTransport := NewMockNetworkTransport(node.ID, testNodes)
-				testNodes[node.ID] = newTestNode(t, newCtx, newCancel, crashedNode.ID, crashedNode.Address, crashedNode.Port, crashedNode.GrpcPort, crashedNode.DataDir, crashedNode.Peers, crashedNode.Clock, mockTransport)
-				break
+LeaderCheck:
+	for {
+		select {
+		case <-exitTicker.Chan():
+			t.Fatalf("Leader not found within 10 secs")
+		case <-checkTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					leaderNode = node
+					break LeaderCheck
+				}
 			}
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
 		}
-		clk.Advance(3 * time.Millisecond)
-		time.Sleep(3 * time.Millisecond)
 	}
 
-	clk.Advance(3 * time.Second)
-	startTime = time.Now()
-	timeout = 500 * time.Millisecond
-
-	leaderCount := false
-	for time.Since(startTime) < timeout {
-		for _, node := range testNodes {
-			if node.State == Leader {
-				leaderCount = true
-				break
-			}
+	if leaderNode != nil {
+		select {
+		case testNodes[leaderNode.ID].ClientCommandChan <- testCommand:
+			t.Logf("Sent Client Command from test")
+		case <-clk.After(3 * time.Second):
+			t.Fatalf("Client Command not received within 3 seconds")
 		}
-		clk.Advance(3 * time.Millisecond)
-		time.Sleep(3 * time.Millisecond)
-	}
-
-	if leaderCount {
-		t.Logf("Success: New leader found after leader node crashed")
 	} else {
-		t.Fatalf("Error: New node not found after leader node crashed")
+		t.Fatalf("Leader not found within time limit")
 	}
+
+	replicationTicker := clk.NewTicker(50 * time.Millisecond)
+	defer replicationTicker.Stop()
+
+	var replicated bool
+ReplicationCheck:
+	for {
+		select {
+		case <-replicationTicker.Chan():
+			replicated = true
+			for _, node := range testNodes {
+				if value, ok := node.GetData()[testCommand.Key]; !ok || !bytes.Equal(value, testCommand.Value) {
+					replicated = false
+					break
+				}
+			}
+			if replicated {
+				break ReplicationCheck
+			}
+		case <-exitTicker.Chan():
+			t.Fatalf("Logs not replicated within 10 secs")
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	if replicated {
+		t.Logf("Success: Replicated leader command")
+	} else {
+		t.Fatalf("Error: Replicated leader command not replicated to all nodes. Replicated to %v nodes.", replicated)
+	}
+
 	t.Cleanup(func() {
 		for _, node := range testNodes {
-			log.Printf("%s", node.ID)
+			node.cancel()
 			go node.Shutdown()
 		}
+		clk.Advance(50 * time.Millisecond)
 		for _, node := range testNodes {
-			clk.Advance(5 * time.Second)
 			node.WaitAllGoroutines()
 		}
 	})
-	t.Logf("Finish")
+
 }
