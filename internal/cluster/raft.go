@@ -88,6 +88,7 @@ type Node struct {
 	requestVoteResponseChan   chan *RequestVoteResponse
 	resetElectionTimeoutChan  chan struct{}
 
+	grpcServer  *grpc.Server
 	applierCond *sync.Cond
 
 	ctx              context.Context
@@ -96,13 +97,17 @@ type Node struct {
 
 	// WaitGroups
 	applierWg    sync.WaitGroup
+	grpcWg       sync.WaitGroup
 	raftLoopWg   sync.WaitGroup
 	persistWg    sync.WaitGroup
 	replicatorWg sync.WaitGroup
-	startWg      sync.WaitGroup
 
-	Clock     clockwork.Clock
-	Transport NetworkTransport
+	dirtyPersistenceState bool
+
+	Clock           clockwork.Clock
+	Transport       NetworkTransport
+	grpcListener    net.Listener
+	raftServer      *RaftServer
 	listenerFactory ListenerFactory
 }
 
@@ -147,6 +152,7 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		Address:                   Address,
 		Port:                      Port,
 		GrpcPort:                  GrpcPort,
+		grpcListener:              nil,
 		data:                      make(map[string][]byte),
 		votedFor:                  "",
 		peers:                     peerIDs,
@@ -163,6 +169,7 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		matchIndex:                make(map[string]uint64),
 		electionTimeout:           nil,
 		appendEntriesChan:         make(chan *AppendEntriesRequestWrapper),
+		grpcServer:                nil,
 		appendEntriesResponseChan: make(chan *AppendEntriesResponseWrapper),
 		ClientCommandChan:         make(chan *Command, 1),
 		persistStateChan:          make(chan *PersistentState, 1),
@@ -171,6 +178,7 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		resetElectionTimeoutChan:  make(chan struct{}, 1),
 		ctx:                       ctx,
 		cancel:                    cancel,
+		dirtyPersistenceState:     false,
 		Clock:                     clk,
 		Transport:                 t,
 		listenerFactory:           lf,
