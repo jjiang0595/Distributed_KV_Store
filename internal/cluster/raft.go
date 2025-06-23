@@ -513,7 +513,22 @@ func (n *Node) RunRaftLoop() {
 				n.votedFor = n.ID
 				n.votesReceived = make(map[string]bool)
 				n.votesReceived[n.ID] = true
-				go n.PersistRaftState()
+				lastLogIndex := func() uint64 {
+					if len(n.log) == 0 {
+						return 0
+					}
+					return n.log[len(n.log)-1].Index
+				}()
+				lastLogTerm := func() uint64 {
+					if len(n.log) == 0 {
+						return 0
+					}
+					return n.log[len(n.log)-1].Term
+				}()
+				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
+				oldLogLength := len(n.log)
+				n.resetElectionTimeout()
+				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 				n.RaftMu.Unlock()
 
 				go n.sendVoteRequestToPeers(n.currentTerm, lastLogIndex, lastLogTerm)
