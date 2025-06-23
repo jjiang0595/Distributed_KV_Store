@@ -11,6 +11,9 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
 
+	oldTerm, oldVotedFor := s.mainNode.currentTerm, s.mainNode.votedFor
+	oldLogLength := len(s.mainNode.log)
+
 	// 1. Reply false if term < currentTerm (§5.1)
 	if req.Term < s.mainNode.currentTerm {
 		return &AppendEntriesResponse{Term: s.mainNode.currentTerm, Success: false}, nil
@@ -21,6 +24,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		s.mainNode.currentTerm = req.Term
 		s.mainNode.state = Follower
 		s.mainNode.votesReceived = make(map[string]bool)
+		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 	}
 
 	select {
@@ -54,14 +58,14 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		log.Printf("%v, %v", leaderIndex, followerIndex)
 		if followerIndex >= leaderIndex || leaderIndex > uint64(len(s.mainNode.log)) {
 			s.mainNode.log = append(s.mainNode.log, req.Entries[i:]...)
-			go s.mainNode.PersistRaftState()
-			return &AppendEntriesResponse{Term: s.mainNode.currentTerm, Success: true}, nil
+			s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
+			break
 		}
 		if s.mainNode.log[followerIndex].Term != entry.Term {
 			s.mainNode.log = s.mainNode.log[:followerIndex]
 			s.mainNode.log = append(s.mainNode.log, req.Entries[i:]...)
-			go s.mainNode.PersistRaftState()
-			return &AppendEntriesResponse{Term: s.mainNode.currentTerm, Success: true}, nil
+			s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
+			break
 		}
 	}
 	log.Printf("Leader Commit: %v, commitIndex: %v", req.LeaderCommit, s.mainNode.commitIndex)
@@ -72,7 +76,6 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 			lastEntryIndex = s.mainNode.log[len(s.mainNode.log)-1].Index
 		}
 		s.mainNode.commitIndex = min(req.LeaderCommit, lastEntryIndex)
-		go s.mainNode.PersistRaftState()
 		s.mainNode.applierCond.Broadcast()
 	}
 	log.Printf("Current log: %v", s.mainNode.log)
@@ -83,6 +86,10 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 	//log.Printf("Candidate %s: Processing vote request for %s at time %v", req.CandidateId, s.mainNode.ID, s.mainNode.Clock.Now())
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
+
+	oldTerm, oldVotedFor := s.mainNode.currentTerm, s.mainNode.votedFor
+	oldLogLength := len(s.mainNode.log)
+
 	if req.Term < s.mainNode.currentTerm {
 		return &RequestVoteResponse{Term: s.mainNode.currentTerm, VoteGranted: false, VoterId: s.mainNode.ID}, nil
 	}
@@ -91,7 +98,7 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 		s.mainNode.votedFor = ""
 		s.mainNode.currentTerm = req.Term
 		s.mainNode.state = Follower
-		go s.mainNode.PersistRaftState()
+		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 	}
 	select {
 	case s.mainNode.resetElectionTimeoutChan <- struct{}{}:
@@ -130,6 +137,8 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
 	candidateTerm, voterTerm, voteGranted := s.mainNode.currentTerm, req.Term, req.VoteGranted
+	oldTerm, oldVotedFor := s.mainNode.currentTerm, s.mainNode.votedFor
+	oldLogLength := len(s.mainNode.log)
 
 	if voterTerm > candidateTerm {
 		s.mainNode.votedFor = ""
@@ -142,8 +151,7 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 		default:
 			log.Printf("Election timeout channel full")
 		}
-		go s.mainNode.PersistRaftState()
-
+		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 		return
 	}
 
