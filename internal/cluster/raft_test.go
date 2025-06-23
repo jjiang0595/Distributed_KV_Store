@@ -41,8 +41,7 @@ func TestMain(m *testing.M) {
 	os.Exit(exitCode)
 }
 
-func testSetup(t *testing.T) (context.Context, context.CancelFunc, map[string]*Node, *clockwork.FakeClock) {
-	ctx, cancel := context.WithCancel(context.Background())
+func testSetup(t *testing.T) (map[string]*Node, *clockwork.FakeClock) {
 	clk := clockwork.NewFakeClock()
 
 	nodeIDs := make([]string, 3)
@@ -52,16 +51,19 @@ func testSetup(t *testing.T) (context.Context, context.CancelFunc, map[string]*N
 
 	tempNodes := make(map[string]*Node)
 	for i := 0; i < 3; i++ {
-		newNode := NewNode(ctx, cancel, nodeIDs[i], "localhost:", 0, 0, t.TempDir(), filterSelfID(nodeIDs[i], nodeIDs), clk, MockListenerFactory, nil)
+		newNode := NewNode(nil, nil, nodeIDs[i], "localhost:", 0, 0, t.TempDir(), filterSelfID(nodeIDs[i], nodeIDs), clk, MockListenerFactory, nil)
 		tempNodes[nodeIDs[i]] = newNode
 	}
 
 	testNodes := make(map[string]*Node)
 	for i := 0; i < 3; i++ {
-		mockTransport := NewMockNetworkTransport(ctx, nodeIDs[i], tempNodes)
+		nodeCtx, nodeCancel := context.WithCancel(context.Background())
+		mockTransport := NewMockNetworkTransport(nodeCtx, nodeIDs[i], tempNodes)
 		newNode := tempNodes[nodeIDs[i]]
 		newNode.Transport = mockTransport
 		testNodes[nodeIDs[i]] = newNode
+		testNodes[nodeIDs[i]].ctx = nodeCtx
+		testNodes[nodeIDs[i]].cancel = nodeCancel
 	}
 	testNodesWg := sync.WaitGroup{}
 	for _, node := range testNodes {
@@ -73,7 +75,7 @@ func testSetup(t *testing.T) (context.Context, context.CancelFunc, map[string]*N
 	}
 
 	testNodesWg.Wait()
-	return ctx, cancel, testNodes, clk
+	return testNodes, clk
 }
 
 func filterSelfID(nodeID string, nodes []string) []string {
@@ -87,8 +89,6 @@ func filterSelfID(nodeID string, nodes []string) []string {
 }
 
 func TestLeaderElection_SingleLeader(t *testing.T) {
-	_, cancel, testNodes, clk := testSetup(t)
-	defer cancel()
 
 	clk.Advance(3 * time.Second)
 	timeout := 500 * time.Millisecond
@@ -117,8 +117,6 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 		Value: []byte("testValue"),
 	}
 
-	_, cancel, testNodes, clk := testSetup(t)
-	defer cancel()
 
 	var leaderNode *Node
 	exitTicker := clk.NewTicker(10 * time.Second)
