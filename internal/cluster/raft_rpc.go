@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"context"
-	"fmt"
 	"log"
 )
 
@@ -105,6 +104,7 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 		s.mainNode.votedFor = ""
 		s.mainNode.currentTerm = req.Term
 		s.mainNode.state = Follower
+		s.mainNode.votesReceived = make(map[string]bool)
 		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 	}
 	select {
