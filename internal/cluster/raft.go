@@ -516,12 +516,7 @@ func (n *Node) RunRaftLoop() {
 				go n.PersistRaftState()
 				n.RaftMu.Unlock()
 
-				select {
-				case n.resetElectionTimeoutChan <- struct{}{}:
-					log.Printf("Candidate - Election timeout")
-				default:
-					log.Printf("Election timeout channel full")
-				}
+				go n.sendVoteRequestToPeers(n.currentTerm, lastLogIndex, lastLogTerm)
 
 			case aeReq := <-n.appendEntriesChan:
 				log.Printf("Request received in appendEntriesChan")
@@ -555,5 +550,13 @@ func (n *Node) RunRaftLoop() {
 				}
 			}
 		}
+	}
+}
+
+func (n *Node) sendVoteRequestToPeers(currentTerm uint64, lastLogIndex uint64, lastLogTerm uint64) {
+	for _, peerID := range n.peers {
+		voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*300)
+		n.raftLoopWg.Add(1)
+		go n.sendVoteRequestToPeer(voteCtx, voteCancel, peerID, currentTerm, lastLogIndex, lastLogTerm)
 	}
 }
