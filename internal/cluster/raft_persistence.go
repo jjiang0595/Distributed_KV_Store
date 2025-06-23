@@ -67,6 +67,37 @@ func (n *Node) LoadRaftState() error {
 	return nil
 }
 
+func (n *Node) WriteToDisk(savedState *PersistentState) error {
+	var buffer bytes.Buffer
+	encoder := gob.NewEncoder(&buffer)
+	if err := encoder.Encode(savedState); err != nil {
+		return fmt.Errorf("error encoding saved state: %v", err)
+	}
+
+	filePath := filepath.Join(n.dataDir, "raft_state.gob")
+	tmpFilePath := filePath + ".tmp"
+
+	file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		log.Fatalf("Error opening file: %v", err)
+	}
+	if _, err := file.Write(buffer.Bytes()); err != nil {
+		log.Fatalf("error saving raft state: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		log.Fatalf("error saving raft state: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		log.Fatalf("error closing file: %v", err)
+	}
+	if err := os.Rename(tmpFilePath, filePath); err != nil {
+		os.Remove(tmpFilePath)
+		return fmt.Errorf("node %s: error renaming saved state: %v", n.ID, err)
+	}
+	log.Printf("Node %s: Saved to Raft State %s", n.ID, filePath)
+	return nil
+}
+
 func (n *Node) PersistStateGoroutine() {
 	defer func() {
 		n.persistWg.Done()
@@ -82,32 +113,7 @@ func (n *Node) PersistStateGoroutine() {
 				log.Printf("Leader %s: PersistStateGoroutine stopped through !ok", n.ID)
 				return
 			}
-			var buffer bytes.Buffer
-			encoder := gob.NewEncoder(&buffer)
-			if err := encoder.Encode(raftState); err != nil {
-				log.Fatalf("Error encoding saved state: %v", err)
-			}
-
-			filePath := filepath.Join(n.dataDir, "raft_state.gob")
-			tmpFilePath := filePath + ".tmp"
-
-			file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-			if err != nil {
-				log.Fatalf("Error opening file: %v", err)
-			}
-
-			if _, err := file.Write(buffer.Bytes()); err != nil {
-				log.Fatalf("error saving raft state: %v", err)
-			}
-			if err := file.Sync(); err != nil {
-				log.Fatalf("error saving raft state: %v", err)
-			}
-			if err := file.Close(); err != nil {
-				log.Fatalf("error closing file: %v", err)
-			}
-			if err := os.Rename(tmpFilePath, filePath); err != nil {
-				os.Remove(tmpFilePath)
-				log.Fatalf("error renaming saved state: %v", err)
+			return
 			}
 			log.Printf("Node %s: Saved to Raft State %s", n.ID, filePath)
 		}
