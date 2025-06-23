@@ -471,17 +471,16 @@ func (n *Node) RunRaftLoop() {
 				n.raftServer.ReceiveVote(reqVoteRespWrapper)
 
 				n.RaftMu.Lock()
-				votesReceivedLen, peersLen := len(n.votesReceived), len(n.peers)
+				votesReceivedLen, totalNodes := len(n.votesReceived), len(n.peers)+1
 
-				if uint64(votesReceivedLen) >= uint64(peersLen/2)+1 {
+				if uint64(votesReceivedLen) >= uint64(totalNodes/2)+1 {
 					n.state = Leader
+					n.electionTimeout.Stop()
 					n.leaderID = n.ID
+					n.RaftMu.Unlock()
 					n.nextIndex = make(map[string]uint64)
 					n.matchIndex = make(map[string]uint64)
 					for _, peerID := range n.peers {
-						if peerID == n.ID {
-							continue
-						}
 						n.nextIndex[peerID] = func() uint64 {
 							if len(n.log) == 0 {
 								return 1
@@ -490,8 +489,9 @@ func (n *Node) RunRaftLoop() {
 						}()
 						n.matchIndex[peerID] = 0
 					}
-					log.Printf("New Leader - %s. votesReceived %v", n.ID, n.votesReceived)
-					n.StartReplicators()
+					log.Printf("New Leader - %s at time %v. votesReceived %v", n.ID, n.Clock.Now(), n.votesReceived)
+					go n.StartReplicators()
+					continue
 				}
 				n.RaftMu.Unlock()
 			}
@@ -507,8 +507,8 @@ func (n *Node) RunRaftLoop() {
 				n.resetElectionTimeout()
 				n.RaftMu.Unlock()
 			case <-n.electionTimeout.Chan():
-				log.Printf("Follower - Election timeout")
 				n.RaftMu.Lock()
+				log.Printf("%s: Follower -> Candidate: Time %v", n.ID, n.Clock.Now())
 				n.state = Candidate
 				n.currentTerm += 1
 				n.votedFor = n.ID
