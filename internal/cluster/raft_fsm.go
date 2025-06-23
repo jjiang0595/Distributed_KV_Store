@@ -17,12 +17,10 @@ func (n *Node) ApplierGoroutine() {
 		for n.commitIndex <= n.lastApplied {
 			select {
 			case <-n.ctx.Done():
-				log.Printf("Node %s: ApplierGoroutine stopped through ctx.Done()", n.ID)
 				return
 			default:
-				n.applierCond.Wait()
-				log.Printf("commitIndex: %v, lastApplied: %v", n.commitIndex, n.lastApplied)
 			}
+			n.applierCond.Wait()
 		}
 
 		for n.lastApplied < n.commitIndex {
@@ -36,7 +34,6 @@ func (n *Node) ApplierGoroutine() {
 			}
 
 			n.data[cmd.Key] = cmd.Value
-			go n.PersistRaftState()
 			log.Printf("Node %s: PUT %s -> %s", n.ID, cmd.Key, string(cmd.Value))
 		}
 	}
