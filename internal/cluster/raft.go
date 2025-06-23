@@ -43,6 +43,16 @@ type Command struct {
 	Value []byte
 }
 
+type ListenerFactory func(address string) (net.Listener, error)
+
+func ProdListenerFactory(address string) (net.Listener, error) {
+	return net.Listen("tcp", address)
+}
+
+func MockListenerFactory(address string) (net.Listener, error) {
+	return NewMockListener(address), nil
+}
+
 type Node struct {
 	ID       string `yaml:"id"`
 	Address  string `yaml:"address"`
@@ -93,6 +103,7 @@ type Node struct {
 
 	Clock     clockwork.Clock
 	Transport NetworkTransport
+	listenerFactory ListenerFactory
 }
 
 type NodeMap struct {
@@ -130,7 +141,7 @@ func NewRaftServer(mainNode *Node) *RaftServer {
 	}
 }
 
-func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address string, Port int, GrpcPort int, dataDir string, peerIDs []string, clk clockwork.Clock, t NetworkTransport) *Node {
+func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address string, Port int, GrpcPort int, dataDir string, peerIDs []string, clk clockwork.Clock, lf ListenerFactory, t NetworkTransport) *Node {
 	node := &Node{
 		ID:                        ID,
 		Address:                   Address,
@@ -162,7 +173,9 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		cancel:                    cancel,
 		Clock:                     clk,
 		Transport:                 t,
+		listenerFactory:           lf,
 	}
+	listener, err := node.listenerFactory(fmt.Sprintf(":%d", node.GrpcPort))
 	return node
 }
 
