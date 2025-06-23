@@ -311,6 +311,7 @@ func (n *Node) RunRaftLoop() {
 	n.resetElectionTimeout()
 	for {
 		//log.Printf("Node %s: Current commitIndex: %v, Current Term: %v, Current Log: %v, Current lastApplied: %v", n.ID, n.commitIndex, n.currentTerm, n.log, n.lastApplied)
+		switch n.GetState() {
 		case Leader:
 			log.Printf("------------------------Leader---------------------------------")
 			select {
