@@ -161,7 +161,7 @@ func main() {
 	sig := <-sigChan
 	log.Printf("Received signal: %v", sig)
 
-	node.Shutdown()
+	go node.Shutdown()
 	node.WaitAllGoroutines()
 	os.Exit(0)
 }
