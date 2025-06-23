@@ -7,18 +7,14 @@ import (
 )
 
 func (n *Node) StartReplicators() {
-	log.Printf("Starting replicators...")
+	log.Printf("Starting replicators at time %v", n.Clock.Now())
 	n.replicatorCancel = make(map[string]context.CancelFunc)
 
 	for _, peerID := range n.peers {
-		if n.ID == peerID {
-			continue
-		}
 		replicatorCtx, replicatorCancel := context.WithCancel(n.ctx)
 		n.replicatorCancel[peerID] = replicatorCancel
 		n.replicatorWg.Add(1)
-		log.Printf("Leader %s: Starting replicator for peer %s", n.ID, peerID)
-		go n.ReplicateToFollower(replicatorCtx, peerID)
+		go n.replicateToFollower(replicatorCtx, peerID)
 	}
 }
 
@@ -100,21 +96,44 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 	return response.GetSuccess(), nil
 }
 
+func (n *Node) replicateToFollower(stopCtx context.Context, followerID string) {
 	defer func() {
 		n.replicatorWg.Done()
-		log.Printf("Node %s: Replicator goroutine stopped", n.ID)
 	}()
-	retryTime := time.Millisecond * 50
+	retryTime := time.Millisecond * 10
 	maxRetryTime := time.Second * 2
+	retryTimer := n.Clock.NewTimer(retryTime)
+	retryTimer.Stop()
+
+	ticker := n.Clock.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-n.ctx.Done():
-			log.Printf("Leader %s: ReplicateToFollower stopped", n.ID)
+		case <-stopCtx.Done():
+			log.Printf("Node %s: Replicator goroutine stopped", n.ID)
 			return
 
+		case <-ticker.Chan():
+			log.Printf("Node %s: Replicator goroutine tick", n.ID)
+			success, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
+			if err != nil || !success {
+				ticker.Stop()
+				retryTimer.Reset(retryTime)
+			} else {
+				retryTimer.Stop()
 			}
+			
+		case <-retryTimer.Chan():
+			log.Printf("Node %s: Retry Append Entries", n.ID)
+			success, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
+			if err != nil || !success {
 				retryTime = min(maxRetryTime, retryTime*2)
+				retryTimer.Reset(retryTime)
+			} else {
+				retryTime = time.Millisecond * 25
+				ticker = n.Clock.NewTicker(retryTime)
+				retryTimer.Stop()
 			}
 		}
 	}
