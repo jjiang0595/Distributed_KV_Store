@@ -21,16 +21,6 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		s.mainNode.currentTerm = req.Term
 		s.mainNode.state = Follower
 		s.mainNode.votesReceived = make(map[string]bool)
-		go s.mainNode.PersistRaftState()
-	}
-
-	if req.Term == s.mainNode.currentTerm && s.mainNode.state == Candidate {
-		oldVotedFor := s.mainNode.votedFor
-		s.mainNode.votedFor = ""
-		s.mainNode.state = Follower
-		if oldVotedFor != s.mainNode.votedFor {
-			go s.mainNode.PersistRaftState()
-		}
 	}
 
 	select {
