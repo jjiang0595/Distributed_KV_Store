@@ -2,11 +2,12 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"log"
 )
 
 func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
-	log.Printf("Processing AppendEntries Request...")
+	//log.Printf("Processing AppendEntries Request at time %v", s.mainNode.Clock.Now())
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
 
@@ -52,7 +53,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 
 	// Find and truncate if a potential conflicting entry is found. Then append all entries
 	if len(req.Entries) == 0 {
-		log.Printf("Received heartbeat from leader %s", s.mainNode.leaderID)
+		log.Printf("Node %s: Received heartbeat from leader %s", s.mainNode.ID, s.mainNode.leaderID)
 	} else {
 		log.Printf("Entries: %v", req.Entries)
 	}
@@ -73,6 +74,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 			return &AppendEntriesResponse{Term: s.mainNode.currentTerm, Success: true}, nil
 		}
 	}
+	log.Printf("Leader Commit: %v, commitIndex: %v", req.LeaderCommit, s.mainNode.commitIndex)
 
 	if req.LeaderCommit > s.mainNode.commitIndex {
 		lastEntryIndex := uint64(0)
@@ -88,7 +90,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 }
 
 func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
-	log.Printf("Processing vote request...")
+	//log.Printf("Candidate %s: Processing vote request for %s at time %v", req.CandidateId, s.mainNode.ID, s.mainNode.Clock.Now())
 	s.mainNode.RaftMu.Lock()
 	defer s.mainNode.RaftMu.Unlock()
 	if req.Term < s.mainNode.currentTerm {
@@ -103,10 +105,11 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 	}
 	select {
 	case s.mainNode.resetElectionTimeoutChan <- struct{}{}:
-		log.Printf("Sending Resetting Election timeout")
+		log.Printf("Receiver %s: Sent to Election Timeout Buffer at time %v", s.mainNode.ID, s.mainNode.Clock.Now())
 	default:
 		log.Printf("Election timeout channel full")
 	}
+
 	var lastLogTerm uint64 = 0
 	if len(s.mainNode.log) > 0 {
 		lastLogTerm = s.mainNode.log[len(s.mainNode.log)-1].Term
@@ -124,7 +127,7 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 		select {
 		case s.mainNode.resetElectionTimeoutChan <- struct{}{}:
-			log.Printf("Candidate %s: Election timeout", s.mainNode.ID)
+			log.Printf("Receiver %s: Sent to Election Timeout Buffer", s.mainNode.ID)
 		default:
 			log.Printf("Election timeout channel full")
 		}
@@ -156,8 +159,7 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 
 	if candidateTerm == voterTerm && voteGranted {
 		s.mainNode.votesReceived[req.VoterId] = true
-		log.Printf("Node %s: Received vote from %s. Total of %v votes", s.mainNode.ID, req.VoterId, len(s.mainNode.votesReceived))
-		log.Printf("Node %v", s.mainNode.votesReceived)
+		log.Printf("Node %s: Received vote from %s. Total of %v votes, %v", s.mainNode.ID, req.VoterId, len(s.mainNode.votesReceived), s.mainNode.votesReceived)
 	}
 }
 
@@ -196,7 +198,6 @@ func (s *RaftServer) RequestVote(ctx context.Context, req *RequestVoteRequest) (
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case s.mainNode.requestVoteChan <- wrapper:
-		log.Printf("Node %s: Sent RequestVote wrapper to %s's RPC handler at time %v", req.CandidateId, s.mainNode.ID, s.mainNode.Clock.Now())
 	}
 
 	select {
