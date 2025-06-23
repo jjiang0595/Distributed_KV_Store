@@ -83,7 +83,7 @@ type Node struct {
 	appendEntriesChan         chan *AppendEntriesRequestWrapper
 	appendEntriesResponseChan chan *AppendEntriesResponseWrapper
 	ClientCommandChan         chan *Command
-	persistStateChan          chan *PersistentState
+	persistStateChan          chan struct{}
 	requestVoteChan           chan *RequestVoteRequestWrapper
 	requestVoteResponseChan   chan *RequestVoteResponse
 	resetElectionTimeoutChan  chan struct{}
@@ -168,12 +168,12 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		nextIndex:                 make(map[string]uint64),
 		matchIndex:                make(map[string]uint64),
 		electionTimeout:           nil,
-		appendEntriesChan:         make(chan *AppendEntriesRequestWrapper),
 		grpcServer:                nil,
+		appendEntriesChan:         make(chan *AppendEntriesRequestWrapper, 1),
 		appendEntriesResponseChan: make(chan *AppendEntriesResponseWrapper),
 		ClientCommandChan:         make(chan *Command, 1),
-		persistStateChan:          make(chan *PersistentState, 1),
-		requestVoteChan:           make(chan *RequestVoteRequestWrapper),
+		persistStateChan:          make(chan struct{}, 1),
+		requestVoteChan:           make(chan *RequestVoteRequestWrapper, 1),
 		requestVoteResponseChan:   make(chan *RequestVoteResponse),
 		resetElectionTimeoutChan:  make(chan struct{}, 1),
 		ctx:                       ctx,
