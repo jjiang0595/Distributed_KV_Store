@@ -318,10 +318,6 @@ func (n *Node) RunRaftLoop() {
 			case <-n.ctx.Done():
 				log.Printf("Leader %s: Shutting down", n.ID)
 				return
-			case <-n.resetElectionTimeoutChan:
-				n.RaftMu.Lock()
-				n.resetElectionTimeout()
-				n.RaftMu.Unlock()
 			case wrappedResp := <-n.appendEntriesResponseChan:
 				n.RaftMu.Lock()
 				grpcResponse := wrappedResp.Response
