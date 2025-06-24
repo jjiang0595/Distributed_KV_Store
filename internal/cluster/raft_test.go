@@ -250,6 +250,7 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 		Value: []byte("testValue"),
 	}
 
+	testNodes, clk := testSetup(t)
 
 	var leaderNode *Node
 	exitTicker := clk.NewTicker(10 * time.Second)
@@ -319,7 +320,6 @@ ReplicationCheck:
 
 	t.Cleanup(func() {
 		for _, node := range testNodes {
-			node.cancel()
 			go node.Shutdown()
 		}
 		clk.Advance(50 * time.Millisecond)
