@@ -89,27 +89,78 @@ func filterSelfID(nodeID string, nodes []string) []string {
 }
 
 func TestLeaderElection_SingleLeader(t *testing.T) {
+	testNodes, clk := testSetup(t)
 
-	clk.Advance(3 * time.Second)
-	timeout := 500 * time.Millisecond
-	startTime := time.Now()
+	exitTicker := clk.NewTicker(500 * time.Millisecond)
+	checkTicker := clk.NewTicker(25 * time.Millisecond)
 
-	leaderCount := false
-	for time.Since(startTime) < timeout {
-		for _, node := range testNodes {
-			if node.State == Leader {
-				leaderCount = true
-				break
+	leaderFound := false
+LeaderCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					leaderFound = true
+					break LeaderCheck
+				}
 			}
+
+		case <-exitTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					leaderFound = true
+				}
+			}
+			break LeaderCheck
+
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
 		}
-		clk.Advance(3 * time.Millisecond)
-		time.Sleep(3 * time.Millisecond)
 	}
 
-	if leaderCount {
+	if leaderFound {
 		t.Logf("Success: Single Leader")
 	} else {
-		t.Fatalf("followerCount should be 2")
+		t.Fatalf("Error: Leader not found within 500 ms")
+	}
+
+	checkTicker.Reset(25 * time.Millisecond)
+	exitTicker.Reset(1 * time.Second)
+SingleLeaderCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			leaderFound = false
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					if leaderFound {
+						t.Fatalf("Error: Multiple leaders detected within 1 second")
+					}
+					leaderFound = true
+				}
+			}
+		case <-exitTicker.Chan():
+			break SingleLeaderCheck
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	t.Logf("Success: Single Leader")
+
+	t.Cleanup(func() {
+		for _, node := range testNodes {
+			go node.Shutdown()
+		}
+		for _, node := range testNodes {
+			node.WaitAllGoroutines()
+		}
+	})
+}
+
 func TestLogReplication_LeaderCommand(t *testing.T) {
 	testCommand := &Command{
 		Type:  CommandPut,
