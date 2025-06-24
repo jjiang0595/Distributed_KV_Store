@@ -161,6 +161,88 @@ SingleLeaderCheck:
 	})
 }
 
+func TestLeaderElection_LeaderCrashRecovery(t *testing.T) {
+	testNodes, clk := testSetup(t)
+	newCtx, newCancel := context.WithCancel(context.Background())
+	defer newCancel()
+
+	checkTicker := clk.NewTicker(50 * time.Millisecond)
+	exitTicker := clk.NewTicker(2 * time.Second)
+
+CrashLeader:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					crashedNode := testNodes[node.ID]
+					delete(testNodes, node.ID)
+					node.cancel()
+					go node.Shutdown()
+					node.WaitAllGoroutines()
+					runtime.Gosched()
+					mockTransport := NewMockNetworkTransport(newCtx, node.ID, testNodes)
+					testNodes[node.ID] = NewNode(newCtx, newCancel, crashedNode.ID, crashedNode.Address, crashedNode.Port, crashedNode.GrpcPort, crashedNode.dataDir, crashedNode.peers, crashedNode.Clock, MockListenerFactory, mockTransport)
+					testNodes[node.ID].Start()
+					break CrashLeader
+				}
+			}
+		case <-exitTicker.Chan():
+			log.Fatalf("Error: Leader not found within 2 seconds")
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	clk.Advance(300 * time.Millisecond)
+	runtime.Gosched()
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	var leaderFound bool
+
+LeaderCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					leaderFound = true
+					break LeaderCheck
+				}
+			}
+
+		case <-exitTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					leaderFound = true
+				}
+			}
+			break LeaderCheck
+
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	if leaderFound {
+		t.Logf("Success: Leader recovered after crash")
+	} else {
+		t.Fatalf("Error: Leader not found within 2 secs")
+	}
+
+	t.Cleanup(func() {
+		for _, node := range testNodes {
+			go node.Shutdown()
+		}
+		clk.Advance(50 * time.Millisecond)
+		for _, node := range testNodes {
+			node.WaitAllGoroutines()
+		}
+	})
+}
+
 func TestLogReplication_LeaderCommand(t *testing.T) {
 	testCommand := &Command{
 		Type:  CommandPut,
