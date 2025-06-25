@@ -98,6 +98,7 @@ func compareLogs(log1 *LogEntry, log2 *LogEntry) bool {
 	return true
 }
 
+func TestLeaderElection_FindLeader(t *testing.T) {
 	testNodes, clk := testSetup(t)
 
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
@@ -135,30 +136,96 @@ LeaderCheck:
 		t.Fatalf("Error: Leader not found within 500 ms")
 	}
 
-	checkTicker.Reset(25 * time.Millisecond)
-	exitTicker.Reset(1 * time.Second)
-SingleLeaderCheck:
+	t.Cleanup(func() {
+		for _, node := range testNodes {
+			go node.Shutdown()
+		}
+		for _, node := range testNodes {
+			node.WaitAllGoroutines()
+		}
+	})
+}
+
+func TestLeaderElection_LeaderStability(t *testing.T) {
+	testNodes, clk := testSetup(t)
+
+	exitTicker := clk.NewTicker(500 * time.Millisecond)
+	checkTicker := clk.NewTicker(25 * time.Millisecond)
+
+	leaderFound := false
+	leaderID := ""
+LeaderCheck:
 	for {
 		select {
 		case <-checkTicker.Chan():
-			leaderFound = false
 			for _, node := range testNodes {
 				if node.GetState() == Leader {
-					if leaderFound {
-						t.Fatalf("Error: Multiple leaders detected within 1 second")
-					}
+					leaderFound = true
+					leaderID = node.ID
+					break LeaderCheck
+				}
+			}
+
+		case <-exitTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
 					leaderFound = true
 				}
 			}
-		case <-exitTicker.Chan():
-			break SingleLeaderCheck
+			break LeaderCheck
+
 		default:
 			clk.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
-	t.Logf("Success: Single Leader")
+	if !leaderFound {
+		t.Fatalf("Error: Leader not found within 500 ms")
+	}
+
+	checkTicker.Reset(25 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	leaderFound = false
+
+CorrectLeaderCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			leaderFound = false
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					if leaderID == node.ID {
+						leaderFound = true
+					}
+					if node.ID != leaderID {
+						t.Fatalf("Error: Wrong leader detected")
+					}
+				}
+			}
+			if !leaderFound {
+				t.Fatalf("Error: Leader not found")
+			}
+		case <-exitTicker.Chan():
+			break CorrectLeaderCheck
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	t.Logf("Success: Leader is stable")
+
+	t.Cleanup(func() {
+		for _, node := range testNodes {
+			go node.Shutdown()
+		}
+		for _, node := range testNodes {
+			node.WaitAllGoroutines()
+		}
+	})
+}
+
 
 	t.Cleanup(func() {
 		for _, node := range testNodes {
