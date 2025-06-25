@@ -109,6 +109,9 @@ type Node struct {
 	grpcListener    net.Listener
 	raftServer      *RaftServer
 	listenerFactory ListenerFactory
+
+	minElectionTimeout int
+	maxElectionTimeout int
 }
 
 type NodeMap struct {
@@ -183,6 +186,8 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		Clock:                     clk,
 		Transport:                 t,
 		listenerFactory:           lf,
+		minElectionTimeout:        minElectionTimeoutMs,
+		maxElectionTimeout:        maxElectionTimeoutMs,
 	}
 	node.applierCond = sync.NewCond(&node.RaftMu)
 
@@ -264,7 +269,7 @@ func (n *Node) WaitAllGoroutines() {
 }
 
 func (n *Node) resetElectionTimeout() {
-	durationMs := rand.Intn(maxElectionTimeoutMs-minElectionTimeoutMs+1) + minElectionTimeoutMs
+	durationMs := rand.Intn(n.maxElectionTimeout-n.minElectionTimeout+1) + n.minElectionTimeout
 	timeout := time.Duration(durationMs) * time.Millisecond
 
 	if n.electionTimeout != nil {
