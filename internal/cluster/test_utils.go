@@ -110,7 +110,7 @@ LeaderCheck:
 	}
 
 	if !leaderFound {
-		t.Fatalf("Error: Leader not found within 500 ms")
+		t.Fatalf("Error: Leader not found within time limit")
 	}
 	return leaderID
 }
