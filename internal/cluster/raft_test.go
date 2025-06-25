@@ -368,9 +368,70 @@ FollowerRecoveryCheck:
 	cleanup(t, testNodes)
 }
 
+func TestNodePartition_LeaderPartition(t *testing.T) {
+	testNodes, clk := testSetup(t)
+	exitTicker := clk.NewTicker(500 * time.Millisecond)
+	checkTicker := clk.NewTicker(25 * time.Millisecond)
+
+	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+
+	for _, peerID := range testNodes[leaderID].peers {
+		leaderTransport, peerTransport := testNodes[leaderID].Transport.(*MockNetworkTransport), testNodes[peerID].Transport.(*MockNetworkTransport)
+		leaderTransport.PartitionNode(peerID, true)
+		peerTransport.PartitionNode(leaderID, true)
+	}
+
+	exitTicker.Reset(500 * time.Millisecond)
+	checkTicker.Reset(25 * time.Millisecond)
+
+	majorityNodes := make(map[string]*Node)
+	for _, node := range testNodes {
+		if node.ID != leaderID {
+			majorityNodes[node.ID] = node
 		}
-		for _, node := range testNodes {
-			node.WaitAllGoroutines()
+	}
+
+	findLeader(t, clk, majorityNodes, checkTicker, exitTicker)
+
+	for _, peerID := range testNodes[leaderID].peers {
+		leaderTransport, peerTransport := testNodes[leaderID].Transport.(*MockNetworkTransport), testNodes[peerID].Transport.(*MockNetworkTransport)
+		leaderTransport.PartitionNode(peerID, false)
+		peerTransport.PartitionNode(leaderID, false)
+	}
+
+	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(20 * time.Millisecond)
+	stepDown := false
+
+ReintroduceOldLeader:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			for _, node := range testNodes {
+				if node.ID == leaderID && testNodes[leaderID].GetState() == Follower {
+					stepDown = true
+					break ReintroduceOldLeader
+				}
+			}
+
+		case <-exitTicker.Chan():
+			for _, node := range testNodes {
+				if node.ID == leaderID && node.GetState() == Follower {
+					stepDown = true
+				}
+			}
+			break ReintroduceOldLeader
+
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
 		}
-	})
+	}
+
+	if !stepDown {
+		t.Fatalf("Error: Old leader didn't step down.")
+	}
+
+	t.Logf("Success: Old leader step down")
+	cleanup(t, testNodes)
 }
