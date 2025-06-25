@@ -88,7 +88,16 @@ func filterSelfID(nodeID string, nodes []string) []string {
 	return filteredList
 }
 
-func TestLeaderElection_SingleLeader(t *testing.T) {
+func compareLogs(log1 *LogEntry, log2 *LogEntry) bool {
+	if log1.Term != log2.Term || log1.Index != log2.Index {
+		return false
+	}
+	if !bytes.Equal(log1.Command, log2.Command) {
+		return false
+	}
+	return true
+}
+
 	testNodes, clk := testSetup(t)
 
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
