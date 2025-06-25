@@ -353,7 +353,6 @@ LeaderCheck:
 		for _, node := range testNodes {
 			go node.Shutdown()
 		}
-		clk.Advance(50 * time.Millisecond)
 		for _, node := range testNodes {
 			node.WaitAllGoroutines()
 		}
@@ -439,7 +438,6 @@ ReplicationCheck:
 		for _, node := range testNodes {
 			go node.Shutdown()
 		}
-		clk.Advance(50 * time.Millisecond)
 		for _, node := range testNodes {
 			node.WaitAllGoroutines()
 		}
