@@ -33,8 +33,18 @@ func (n *Node) GetVotedFor() string {
 func (n *Node) GetLog() []*LogEntry {
 	n.RaftMu.Lock()
 	defer n.RaftMu.Unlock()
-	logCopy := make([]*LogEntry, len(n.log))
-	copy(logCopy, n.log)
+	logCopy := make([]*LogEntry, 0, len(n.log))
+	for _, logEntry := range n.log {
+		if logEntry != nil {
+			newEntry := &LogEntry{
+				Term:    logEntry.Term,
+				Index:   logEntry.Index,
+				Command: make([]byte, len(logEntry.Command)),
+			}
+			copy(newEntry.Command, logEntry.Command)
+			logCopy = append(logCopy, newEntry)
+		}
+	}
 	return logCopy
 }
 
