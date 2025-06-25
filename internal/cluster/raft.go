@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -64,19 +65,20 @@ type Node struct {
 	// Raft
 	RaftMu sync.Mutex
 
-	peers            []string
-	currentTerm      uint64            // Latest term server
-	votedFor         string            // Candidate ID that the node voted for
-	log              []*LogEntry       // Replicated messages log
-	commitIndex      uint64            // Index of highest entry that was known to be committed
-	state            RaftState         // Leader, Candidate, Follower
-	lastApplied      uint64            // Highest index that was applied to state machine (data)
-	leaderID         string            // Current leader's ID, default ""
-	votesReceived    map[string]bool   // Set of node IDs that the candidate has received votes from
-	nextIndex        map[string]uint64 // (Leader) The next index that the leader will send to a follower
-	matchIndex       map[string]uint64 // (Leader) The index that the leader has already replicated its logs up to
-	electionTimeout  clockwork.Timer   // Election timer that triggers if no gRPC response is heard from leader
-	heartbeatTimeout clockwork.Timer
+	peers             []string
+	currentTerm       uint64            // Latest term server
+	votedFor          string            // Candidate ID that the node voted for
+	log               []*LogEntry       // Replicated messages log
+	commitIndex       uint64            // Index of highest entry that was known to be committed
+	state             RaftState         // Leader, Candidate, Follower
+	lastApplied       uint64            // Highest index that was applied to state machine (data)
+	leaderID          string            // Current leader's ID, default ""
+	votesReceived     map[string]bool   // Set of node IDs that the candidate has received votes from
+	nextIndex         map[string]uint64 // (Leader) The next index that the leader will send to a follower
+	matchIndex        map[string]uint64 // (Leader) The index that the leader has already replicated its logs up to
+	electionTimeout   clockwork.Timer   // Election timer that triggers if no gRPC response is heard from leader
+	heartbeatTimeout  clockwork.Timer
+	electionTimeoutCh chan struct{}
 
 	appendEntriesChan         chan *AppendEntriesRequestWrapper
 	appendEntriesResponseChan chan *AppendEntriesResponseWrapper
@@ -174,6 +176,7 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		requestVoteChan:           make(chan *RequestVoteRequestWrapper, 1),
 		requestVoteResponseChan:   make(chan *RequestVoteResponse),
 		resetElectionTimeoutChan:  make(chan struct{}, 1),
+		electionTimeoutCh:         make(chan struct{}, 1),
 		ctx:                       ctx,
 		cancel:                    cancel,
 		dirtyPersistenceState:     false,
@@ -506,7 +509,38 @@ func (n *Node) RunRaftLoop() {
 				n.RaftMu.Unlock()
 			case <-n.electionTimeout.Chan():
 				n.RaftMu.Lock()
-				log.Printf("%s: Follower -> Candidate: Time %v", n.ID, n.Clock.Now())
+				//log.Printf("%s: Follower -> Candidate: Time %v", n.ID, n.Clock.Now())
+				log.Printf("%s: Follower -> Candidate", n.ID)
+				n.state = Candidate
+				n.currentTerm += 1
+				n.votedFor = n.ID
+				n.votesReceived = make(map[string]bool)
+				n.votesReceived[n.ID] = true
+				lastLogIndex := func() uint64 {
+					if len(n.log) == 0 {
+						return 0
+					}
+					return n.log[len(n.log)-1].Index
+				}()
+				lastLogTerm := func() uint64 {
+					if len(n.log) == 0 {
+						return 0
+					}
+					return n.log[len(n.log)-1].Term
+				}()
+				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
+				oldLogLength := len(n.log)
+				n.resetElectionTimeout()
+				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
+				n.RaftMu.Unlock()
+
+				go n.sendVoteRequestToPeers(n.currentTerm, lastLogIndex, lastLogTerm)
+
+			case <-n.electionTimeoutCh:
+				n.RaftMu.Lock()
+				//log.Printf("%s: Follower -> Candidate: Time %v", n.ID, n.Clock.Now())
+				log.Printf("%s: Follower -> Candidate", n.ID)
+				runtime.Gosched()
 				n.state = Candidate
 				n.currentTerm += 1
 				n.votedFor = n.ID
