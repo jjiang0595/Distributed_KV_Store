@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"encoding/json"
 	"log"
 )
@@ -28,6 +29,9 @@ func (n *Node) ApplierGoroutine() {
 			n.lastApplied++
 			logEntry := n.log[n.lastApplied-1]
 			var cmd Command
+			if bytes.Equal(logEntry.Command, []byte("NO_OP_ENTRY")) {
+				continue
+			}
 			err := json.Unmarshal(logEntry.Command, &cmd)
 			if err != nil {
 				log.Fatalf("Error unmarshalling command: %v", err)
