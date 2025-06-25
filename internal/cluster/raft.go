@@ -483,7 +483,6 @@ func (n *Node) RunRaftLoop() {
 					n.state = Leader
 					n.electionTimeout.Stop()
 					n.leaderID = n.ID
-					n.RaftMu.Unlock()
 					n.nextIndex = make(map[string]uint64)
 					n.matchIndex = make(map[string]uint64)
 					for _, peerID := range n.peers {
@@ -497,7 +496,22 @@ func (n *Node) RunRaftLoop() {
 					}
 					log.Printf("New Leader - %s at time %v. votesReceived %v", n.ID, n.Clock.Now(), n.votesReceived)
 					go n.StartReplicators()
-					continue
+					noOpEntry := &LogEntry{
+						Term: n.currentTerm,
+						Index: func() uint64 {
+							if len(n.log) == 0 {
+								return 1
+							}
+							return n.log[len(n.log)-1].Index + 1
+						}(),
+						Command: []byte("NO_OP_ENTRY"),
+					}
+					n.log = append(n.log, noOpEntry)
+					n.dirtyPersistenceState = true
+					select {
+					case n.persistStateChan <- struct{}{}:
+					default:
+					}
 				}
 				n.RaftMu.Unlock()
 			}
