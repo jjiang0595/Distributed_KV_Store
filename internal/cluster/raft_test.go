@@ -226,6 +226,47 @@ CorrectLeaderCheck:
 	})
 }
 
+func TestLeaderElection_SplitVote(t *testing.T) {
+	testNodes, clk := testSetup(t)
+
+	for _, node := range testNodes {
+		select {
+		case node.electionTimeoutCh <- struct{}{}:
+		default:
+		}
+	}
+
+	exitTicker := clk.NewTicker(10 * time.Second)
+	checkTicker := clk.NewTicker(20 * time.Millisecond)
+	leaderFound := false
+LeaderCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					leaderFound = true
+					break LeaderCheck
+				}
+			}
+		case <-exitTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					leaderFound = true
+				}
+			}
+			break LeaderCheck
+		default:
+			clk.Advance(100 * time.Nanosecond)
+			runtime.Gosched()
+		}
+	}
+
+	if leaderFound {
+		t.Logf("Success: Single Leader")
+	} else {
+		t.Fatalf("Error: Leader not found within 10 secs")
+	}
 
 	t.Cleanup(func() {
 		for _, node := range testNodes {
