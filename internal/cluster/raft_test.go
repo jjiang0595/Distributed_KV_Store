@@ -346,7 +346,7 @@ LeaderCheck:
 	if leaderFound {
 		t.Logf("Success: Leader recovered after crash")
 	} else {
-		t.Fatalf("Error: Leader not found within 2 secs")
+		t.Fatalf("Error: Leader not found within 5 secs")
 	}
 
 	t.Cleanup(func() {
@@ -443,4 +443,137 @@ ReplicationCheck:
 		}
 	})
 
+}
+
+func TestLogReplication_FollowerCrashAndRecovery(t *testing.T) {
+	testNodes, clk := testSetup(t)
+	newCtx, newCancel := context.WithCancel(context.Background())
+	defer newCancel()
+
+	leaderID := ""
+	followerID := ""
+	exitTicker := clk.NewTicker(10 * time.Second)
+	checkTicker := clk.NewTicker(50 * time.Millisecond)
+	defer checkTicker.Stop()
+
+LeaderFollowerSetup:
+	for {
+		select {
+		case <-exitTicker.Chan():
+			t.Fatalf("Leader not found within 10 secs")
+		case <-checkTicker.Chan():
+			for _, node := range testNodes {
+				if node.GetState() == Leader {
+					leaderID = node.ID
+					if followerID != "" {
+						break LeaderFollowerSetup
+					}
+				} else {
+					followerID = node.ID
+				}
+			}
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	testCommand := &Command{
+		Type:  "PUT",
+		Key:   "testKey",
+		Value: []byte("testValue"),
+	}
+
+	select {
+	case testNodes[leaderID].ClientCommandChan <- testCommand:
+		t.Logf("Sent Client Command from test")
+	case <-clk.After(3 * time.Second):
+		log.Fatalf("Timed out sending client command")
+	}
+
+	exitTicker.Reset(10 * time.Second)
+	for len(testNodes[followerID].data) < 1 {
+		select {
+		case <-exitTicker.Chan():
+			t.Fatalf("Leader not found within 5 secs")
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+	deletedNode := testNodes[followerID]
+	testNodes[followerID].cancel()
+	go testNodes[followerID].Shutdown()
+	testNodes[followerID].WaitAllGoroutines()
+	delete(testNodes, followerID)
+	mockTransport := NewMockNetworkTransport(newCtx, followerID, testNodes)
+	testNodes[deletedNode.ID] = NewNode(
+		newCtx,
+		newCancel,
+		deletedNode.ID,
+		deletedNode.Address,
+		deletedNode.Port,
+		deletedNode.GrpcPort,
+		deletedNode.dataDir,
+		deletedNode.peers,
+		deletedNode.Clock,
+		deletedNode.listenerFactory,
+		mockTransport,
+	)
+	testNodes[deletedNode.ID].Start()
+
+	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(50 * time.Millisecond)
+
+	if deletedNode.currentTerm != testNodes[followerID].GetCurrentTerm() || deletedNode.votedFor != testNodes[followerID].GetVotedFor() {
+		log.Fatal("Error: Current Term Or Voted For Mismatch")
+	}
+
+	var recovered bool
+FollowerRecoveryCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			recovered = true
+			if testNodes[followerID].GetCommitIndex() != testNodes[leaderID].GetCommitIndex() {
+				recovered = false
+				continue
+			}
+			if len(testNodes[followerID].data) != len(testNodes[deletedNode.ID].data) {
+				recovered = false
+				continue
+			}
+			for leaderKey, leaderValue := range testNodes[leaderID].data {
+				if value, ok := testNodes[followerID].data[leaderKey]; !ok || !bytes.Equal(leaderValue, value) {
+					recovered = false
+					break
+				}
+			}
+			if recovered {
+				break FollowerRecoveryCheck
+			}
+
+		case <-exitTicker.Chan():
+			recovered = false
+			break FollowerRecoveryCheck
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	if recovered {
+		t.Logf("Success: Recovered follower command")
+	} else {
+		t.Fatalf("Error: Follower not recovered")
+	}
+
+	t.Cleanup(func() {
+		for _, node := range testNodes {
+			go node.Shutdown()
+		}
+		for _, node := range testNodes {
+			node.WaitAllGoroutines()
+		}
+	})
 }
