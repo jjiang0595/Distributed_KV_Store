@@ -3,14 +3,11 @@ package cluster
 import (
 	"bytes"
 	"context"
-	"fmt"
-	"github.com/jonboulle/clockwork"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 )
@@ -39,63 +36,6 @@ func TestMain(m *testing.M) {
 
 	exitCode := m.Run()
 	os.Exit(exitCode)
-}
-
-func testSetup(t *testing.T) (map[string]*Node, *clockwork.FakeClock) {
-	clk := clockwork.NewFakeClock()
-
-	nodeIDs := make([]string, 3)
-	for i := 0; i < 3; i++ {
-		nodeIDs[i] = fmt.Sprintf("node%d", i)
-	}
-
-	tempNodes := make(map[string]*Node)
-	for i := 0; i < 3; i++ {
-		newNode := NewNode(nil, nil, nodeIDs[i], "localhost:", 0, 0, t.TempDir(), filterSelfID(nodeIDs[i], nodeIDs), clk, MockListenerFactory, nil)
-		tempNodes[nodeIDs[i]] = newNode
-	}
-
-	testNodes := make(map[string]*Node)
-	for i := 0; i < 3; i++ {
-		nodeCtx, nodeCancel := context.WithCancel(context.Background())
-		mockTransport := NewMockNetworkTransport(nodeCtx, nodeIDs[i], tempNodes)
-		newNode := tempNodes[nodeIDs[i]]
-		newNode.Transport = mockTransport
-		testNodes[nodeIDs[i]] = newNode
-		testNodes[nodeIDs[i]].ctx = nodeCtx
-		testNodes[nodeIDs[i]].cancel = nodeCancel
-	}
-	testNodesWg := sync.WaitGroup{}
-	for _, node := range testNodes {
-		testNodesWg.Add(1)
-		go func(n *Node) {
-			defer testNodesWg.Done()
-			n.Start()
-		}(node)
-	}
-
-	testNodesWg.Wait()
-	return testNodes, clk
-}
-
-func filterSelfID(nodeID string, nodes []string) []string {
-	filteredList := make([]string, 0)
-	for _, id := range nodes {
-		if nodeID != id {
-			filteredList = append(filteredList, id)
-		}
-	}
-	return filteredList
-}
-
-func compareLogs(log1 *LogEntry, log2 *LogEntry) bool {
-	if log1.Term != log2.Term || log1.Index != log2.Index {
-		return false
-	}
-	if !bytes.Equal(log1.Command, log2.Command) {
-		return false
-	}
-	return true
 }
 
 func TestLeaderElection_FindLeader(t *testing.T) {
@@ -136,14 +76,8 @@ LeaderCheck:
 		t.Fatalf("Error: Leader not found within 500 ms")
 	}
 
-	t.Cleanup(func() {
-		for _, node := range testNodes {
-			go node.Shutdown()
-		}
-		for _, node := range testNodes {
-			node.WaitAllGoroutines()
-		}
-	})
+	cleanup(t, testNodes)
+
 }
 
 func TestLeaderElection_LeaderStability(t *testing.T) {
@@ -152,38 +86,9 @@ func TestLeaderElection_LeaderStability(t *testing.T) {
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
 
+	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+
 	leaderFound := false
-	leaderID := ""
-LeaderCheck:
-	for {
-		select {
-		case <-checkTicker.Chan():
-			for _, node := range testNodes {
-				if node.GetState() == Leader {
-					leaderFound = true
-					leaderID = node.ID
-					break LeaderCheck
-				}
-			}
-
-		case <-exitTicker.Chan():
-			for _, node := range testNodes {
-				if node.GetState() == Leader {
-					leaderFound = true
-				}
-			}
-			break LeaderCheck
-
-		default:
-			clk.Advance(1 * time.Microsecond)
-			runtime.Gosched()
-		}
-	}
-
-	if !leaderFound {
-		t.Fatalf("Error: Leader not found within 500 ms")
-	}
-
 	checkTicker.Reset(25 * time.Millisecond)
 	exitTicker.Reset(5 * time.Second)
 	leaderFound = false
@@ -215,15 +120,7 @@ CorrectLeaderCheck:
 	}
 
 	t.Logf("Success: Leader is stable")
-
-	t.Cleanup(func() {
-		for _, node := range testNodes {
-			go node.Shutdown()
-		}
-		for _, node := range testNodes {
-			node.WaitAllGoroutines()
-		}
-	})
+	cleanup(t, testNodes)
 }
 
 func TestLeaderElection_SplitVote(t *testing.T) {
@@ -238,44 +135,10 @@ func TestLeaderElection_SplitVote(t *testing.T) {
 
 	exitTicker := clk.NewTicker(10 * time.Second)
 	checkTicker := clk.NewTicker(20 * time.Millisecond)
-	leaderFound := false
-LeaderCheck:
-	for {
-		select {
-		case <-checkTicker.Chan():
-			for _, node := range testNodes {
-				if node.GetState() == Leader {
-					leaderFound = true
-					break LeaderCheck
-				}
-			}
-		case <-exitTicker.Chan():
-			for _, node := range testNodes {
-				if node.GetState() == Leader {
-					leaderFound = true
-				}
-			}
-			break LeaderCheck
-		default:
-			clk.Advance(100 * time.Nanosecond)
-			runtime.Gosched()
-		}
-	}
 
-	if leaderFound {
-		t.Logf("Success: Single Leader")
-	} else {
-		t.Fatalf("Error: Leader not found within 10 secs")
-	}
+	findLeader(t, clk, testNodes, checkTicker, exitTicker)
 
-	t.Cleanup(func() {
-		for _, node := range testNodes {
-			go node.Shutdown()
-		}
-		for _, node := range testNodes {
-			node.WaitAllGoroutines()
-		}
-	})
+	cleanup(t, testNodes)
 }
 
 func TestLeaderElection_LeaderCrashRecovery(t *testing.T) {
@@ -316,47 +179,11 @@ CrashLeader:
 	runtime.Gosched()
 	checkTicker.Reset(50 * time.Millisecond)
 	exitTicker.Reset(5 * time.Second)
-	var leaderFound bool
 
-LeaderCheck:
-	for {
-		select {
-		case <-checkTicker.Chan():
-			for _, node := range testNodes {
-				if node.GetState() == Leader {
-					leaderFound = true
-					break LeaderCheck
-				}
-			}
+	findLeader(t, clk, testNodes, checkTicker, exitTicker)
 
-		case <-exitTicker.Chan():
-			for _, node := range testNodes {
-				if node.GetState() == Leader {
-					leaderFound = true
-				}
-			}
-			break LeaderCheck
-
-		default:
-			clk.Advance(1 * time.Microsecond)
-			runtime.Gosched()
-		}
-	}
-
-	if leaderFound {
-		t.Logf("Success: Leader recovered after crash")
-	} else {
-		t.Fatalf("Error: Leader not found within 5 secs")
-	}
-
-	t.Cleanup(func() {
-		for _, node := range testNodes {
-			go node.Shutdown()
-		}
-		for _, node := range testNodes {
-			node.WaitAllGoroutines()
-		}
-	})
+	t.Logf("Success: Leader recovered after crash")
+	cleanup(t, testNodes)
 }
 
 func TestLogReplication_LeaderCommand(t *testing.T) {
@@ -368,38 +195,17 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 
 	testNodes, clk := testSetup(t)
 
-	var leaderNode *Node
 	exitTicker := clk.NewTicker(10 * time.Second)
 	checkTicker := clk.NewTicker(50 * time.Millisecond)
 	defer checkTicker.Stop()
 
-LeaderCheck:
-	for {
-		select {
-		case <-exitTicker.Chan():
-			t.Fatalf("Leader not found within 10 secs")
-		case <-checkTicker.Chan():
-			for _, node := range testNodes {
-				if node.GetState() == Leader {
-					leaderNode = node
-					break LeaderCheck
-				}
-			}
-		default:
-			clk.Advance(1 * time.Microsecond)
-			runtime.Gosched()
-		}
-	}
+	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
 
-	if leaderNode != nil {
-		select {
-		case testNodes[leaderNode.ID].ClientCommandChan <- testCommand:
-			t.Logf("Sent Client Command from test")
-		case <-clk.After(3 * time.Second):
-			t.Fatalf("Client Command not received within 3 seconds")
-		}
-	} else {
-		t.Fatalf("Leader not found within time limit")
+	select {
+	case testNodes[leaderID].ClientCommandChan <- testCommand:
+		t.Logf("Sent Client Command from test")
+	case <-clk.After(3 * time.Second):
+		t.Fatalf("Client Command not received within 3 seconds")
 	}
 
 	replicationTicker := clk.NewTicker(50 * time.Millisecond)
@@ -434,15 +240,7 @@ ReplicationCheck:
 		t.Fatalf("Error: Replicated leader command not replicated to all nodes. Replicated to %v nodes.", replicated)
 	}
 
-	t.Cleanup(func() {
-		for _, node := range testNodes {
-			go node.Shutdown()
-		}
-		for _, node := range testNodes {
-			node.WaitAllGoroutines()
-		}
-	})
-
+	cleanup(t, testNodes)
 }
 
 func TestLogReplication_FollowerCrashAndRecovery(t *testing.T) {
@@ -562,15 +360,14 @@ FollowerRecoveryCheck:
 		}
 	}
 
-	if recovered {
-		t.Logf("Success: Recovered follower command")
-	} else {
+	if !recovered {
 		t.Fatalf("Error: Follower not recovered")
 	}
 
-	t.Cleanup(func() {
-		for _, node := range testNodes {
-			go node.Shutdown()
+	t.Logf("Success: Recovered follower command")
+	cleanup(t, testNodes)
+}
+
 		}
 		for _, node := range testNodes {
 			node.WaitAllGoroutines()
