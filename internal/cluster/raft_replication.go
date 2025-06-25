@@ -42,8 +42,13 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 	}
 	peerNextIndex, ok := n.nextIndex[followerID]
 	if !ok {
-		peerNextIndex = 1
+		if len(n.log) == 0 {
+			peerNextIndex = 1
+		} else {
+			peerNextIndex = n.log[len(n.log)-1].Index + 1
+		}
 	}
+
 	n.RaftMu.Unlock()
 	prevLogIndex, prevLogTerm := uint64(0), uint64(0)
 	if peerNextIndex > 1 {
@@ -58,13 +63,11 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 	}
 
 	entries := make([]*LogEntry, 0)
-
-	if peerNextIndex > 0 && peerNextIndex <= uint64(len(logSnapshot)) {
-		entries = logSnapshot[peerNextIndex-1:]
-	} else if len(logSnapshot) > 0 && peerNextIndex == 0 {
-		entries = logSnapshot
-	} else if len(logSnapshot) > 0 && peerNextIndex > uint64(len(logSnapshot)) {
+	log.Printf("peerNextIndex: %v, log length: %v", peerNextIndex, len(logSnapshot))
+	if peerNextIndex > uint64(len(logSnapshot)) {
 		entries = []*LogEntry{}
+	} else {
+		entries = logSnapshot[peerNextIndex-1:]
 	}
 	replicateCtx, replicateCancel := context.WithTimeout(stopCtx, 200*time.Millisecond)
 	//log.Printf("Leader %s: ReplicateToFollower sending logs to %v at time %v", leaderID, followerID, n.Clock.Now())
