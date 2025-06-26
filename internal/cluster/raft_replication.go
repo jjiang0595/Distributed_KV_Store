@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 )
@@ -9,10 +10,12 @@ import (
 func (n *Node) StartReplicators() {
 	log.Printf("Starting replicators at time %v", n.Clock.Now())
 	n.replicatorCancel = make(map[string]context.CancelFunc)
+	n.replicatorSendNowChan = make(map[string]chan struct{})
 
 	for _, peerID := range n.peers {
 		replicatorCtx, replicatorCancel := context.WithCancel(n.ctx)
 		n.replicatorCancel[peerID] = replicatorCancel
+		n.replicatorSendNowChan[peerID] = make(chan struct{}, 1)
 		n.replicatorWg.Add(1)
 		go n.replicateToFollower(replicatorCtx, peerID)
 	}
@@ -23,6 +26,7 @@ func (n *Node) StopReplicators() {
 		replicatorCancel()
 	}
 	n.replicatorCancel = nil
+	n.replicatorSendNowChan = nil
 }
 
 func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID string) (bool, error) {
@@ -81,7 +85,7 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 	})
 	replicateCancel()
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("error sending append entries request to follower: %v", err)
 	}
 	wrappedResp := &AppendEntriesResponseWrapper{
 		Response:     response,
@@ -91,7 +95,7 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 		SentEntries:  entries,
 	}
 	select {
-	case <-stopCtx.Done():
+	case <-n.ctx.Done():
 		return response.GetSuccess(), nil
 	case n.appendEntriesResponseChan <- wrappedResp:
 		log.Printf("Leader %v: Processing Replication Response", n.ID)
@@ -108,7 +112,7 @@ func (n *Node) replicateToFollower(stopCtx context.Context, followerID string) {
 	retryTimer := n.Clock.NewTimer(retryTime)
 	retryTimer.Stop()
 
-	ticker := n.Clock.NewTicker(25 * time.Millisecond)
+	ticker := n.Clock.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -116,6 +120,15 @@ func (n *Node) replicateToFollower(stopCtx context.Context, followerID string) {
 		case <-stopCtx.Done():
 			log.Printf("Node %s: Replicator goroutine stopped", n.ID)
 			return
+		case <-n.replicatorSendNowChan[followerID]:
+			success, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
+			if err != nil || !success {
+				ticker.Stop()
+				retryTimer.Reset(retryTime)
+			} else {
+				retryTimer.Stop()
+				retryTimer.Reset(retryTime)
+			}
 
 		case <-ticker.Chan():
 			log.Printf("Node %s: Replicator goroutine tick", n.ID)
@@ -126,7 +139,7 @@ func (n *Node) replicateToFollower(stopCtx context.Context, followerID string) {
 			} else {
 				retryTimer.Stop()
 			}
-			
+
 		case <-retryTimer.Chan():
 			log.Printf("Node %s: Retry Append Entries", n.ID)
 			success, err := n.sendAppendEntriesToPeers(stopCtx, followerID)

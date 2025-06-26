@@ -84,6 +84,7 @@ type Node struct {
 	appendEntriesResponseChan chan *AppendEntriesResponseWrapper
 	ClientCommandChan         chan *Command
 	persistStateChan          chan struct{}
+	replicatorSendNowChan     map[string]chan struct{}
 	requestVoteChan           chan *RequestVoteRequestWrapper
 	requestVoteResponseChan   chan *RequestVoteResponse
 	resetElectionTimeoutChan  chan struct{}
@@ -276,7 +277,6 @@ func (n *Node) resetElectionTimeout() {
 		n.electionTimeout.Stop()
 	}
 	n.electionTimeout = n.Clock.NewTimer(timeout)
-	//log.Printf("Node %s: Time now is %vms and election timeout is set to %dms", n.ID, n.Clock.Now(), durationMs)
 }
 
 func (n *Node) sendVoteRequestToPeer(voteCtx context.Context, voteCancel context.CancelFunc, peerID string, currentTerm uint64, lastLogIndex uint64, lastLogTerm uint64) {
@@ -356,7 +356,12 @@ func (n *Node) RunRaftLoop() {
 					log.Printf("Node %s: Failed to replicate to follower", n.ID)
 					if n.nextIndex[wrappedResp.PeerID] > 1 {
 						n.nextIndex[wrappedResp.PeerID] -= 1
+						select {
+						case n.replicatorSendNowChan[n.ID] <- struct{}{}:
+						default:
+						}
 					}
+					continue
 				}
 				n.RaftMu.Unlock()
 				// Update Leader's Commit Index
