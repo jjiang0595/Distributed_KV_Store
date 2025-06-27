@@ -62,13 +62,13 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 
 		followerIndex := leaderIndex - 1
 		log.Printf("%v, %v", leaderIndex, followerIndex)
-		if followerIndex >= leaderIndex || leaderIndex > uint64(len(s.mainNode.log)) {
+		if followerIndex < uint64(len(s.mainNode.log)) && s.mainNode.log[followerIndex].Term != entry.Term {
+			s.mainNode.log = s.mainNode.log[:followerIndex]
 			s.mainNode.log = append(s.mainNode.log, req.Entries[i:]...)
 			s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 			break
 		}
-		if s.mainNode.log[followerIndex].Term != entry.Term {
-			s.mainNode.log = s.mainNode.log[:followerIndex]
+		if followerIndex >= uint64(len(s.mainNode.log)) {
 			s.mainNode.log = append(s.mainNode.log, req.Entries[i:]...)
 			s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 			break
