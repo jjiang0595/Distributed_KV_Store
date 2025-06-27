@@ -9,14 +9,18 @@ import (
 
 func (n *Node) StartReplicators() {
 	log.Printf("Starting replicators at time %v", n.Clock.Now())
+	n.RaftMu.Lock()
 	n.replicatorCancel = make(map[string]context.CancelFunc)
 	n.replicatorSendNowChan = make(map[string]chan struct{})
+	n.RaftMu.Unlock()
 
 	for _, peerID := range n.peers {
+		n.RaftMu.Lock()
 		replicatorCtx, replicatorCancel := context.WithCancel(n.ctx)
 		n.replicatorCancel[peerID] = replicatorCancel
 		n.replicatorSendNowChan[peerID] = make(chan struct{}, 1)
 		n.replicatorWg.Add(1)
+		n.RaftMu.Unlock()
 		go n.replicateToFollower(replicatorCtx, peerID)
 	}
 }
@@ -25,8 +29,8 @@ func (n *Node) StopReplicators() {
 	for _, replicatorCancel := range n.replicatorCancel {
 		replicatorCancel()
 	}
-	n.replicatorCancel = nil
 	n.replicatorSendNowChan = nil
+	n.replicatorCancel = nil
 }
 
 func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID string) (bool, error) {
@@ -45,15 +49,15 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 		}
 	}
 	peerNextIndex, ok := n.nextIndex[followerID]
+	n.RaftMu.Unlock()
 	if !ok {
-		if len(n.log) == 0 {
+		if len(logSnapshot) == 0 {
 			peerNextIndex = 1
 		} else {
-			peerNextIndex = n.log[len(n.log)-1].Index + 1
+			peerNextIndex = logSnapshot[len(logSnapshot)-1].Index + 1
 		}
 	}
 
-	n.RaftMu.Unlock()
 	prevLogIndex, prevLogTerm := uint64(0), uint64(0)
 	if peerNextIndex > 1 {
 		if peerNextIndex-2 < uint64(len(logSnapshot)) {
@@ -116,11 +120,22 @@ func (n *Node) replicateToFollower(stopCtx context.Context, followerID string) {
 	defer ticker.Stop()
 
 	for {
+		n.RaftMu.Lock()
+		replicatorChan, ok := n.replicatorSendNowChan[followerID]
+		n.RaftMu.Unlock()
+		if !ok {
+			return
+		}
+
 		select {
 		case <-stopCtx.Done():
 			log.Printf("Node %s: Replicator goroutine stopped", n.ID)
 			return
-		case <-n.replicatorSendNowChan[followerID]:
+		case <-replicatorChan:
+			log.Printf("Node %s: Immediate retry", n.ID)
+			ticker.Stop()
+			retryTimer.Stop()
+
 			success, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
 			if err != nil || !success {
 				ticker.Stop()
@@ -132,8 +147,8 @@ func (n *Node) replicateToFollower(stopCtx context.Context, followerID string) {
 
 		case <-ticker.Chan():
 			log.Printf("Node %s: Replicator goroutine tick", n.ID)
-			success, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
-			if err != nil || !success {
+			_, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
+			if err != nil {
 				ticker.Stop()
 				retryTimer.Reset(retryTime)
 			} else {
@@ -142,8 +157,8 @@ func (n *Node) replicateToFollower(stopCtx context.Context, followerID string) {
 
 		case <-retryTimer.Chan():
 			log.Printf("Node %s: Retry Append Entries", n.ID)
-			success, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
-			if err != nil || !success {
+			_, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
+			if err != nil {
 				retryTime = min(maxRetryTime, retryTime*2)
 				retryTimer.Reset(retryTime)
 			} else {

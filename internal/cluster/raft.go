@@ -338,11 +338,11 @@ func (n *Node) RunRaftLoop() {
 					n.currentTerm = grpcResponse.Term
 					n.votesReceived = make(map[string]bool)
 					n.votedFor = ""
-					n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
-					n.StopReplicators()
 					n.resetElectionTimeout()
+					n.StopReplicators()
 					log.Printf("Leader %s: Stepping down", n.ID)
 					n.RaftMu.Unlock()
+					n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 					continue
 				}
 
@@ -357,7 +357,7 @@ func (n *Node) RunRaftLoop() {
 					if n.nextIndex[wrappedResp.PeerID] > 1 {
 						n.nextIndex[wrappedResp.PeerID] -= 1
 						select {
-						case n.replicatorSendNowChan[n.ID] <- struct{}{}:
+						case n.replicatorSendNowChan[wrappedResp.PeerID] <- struct{}{}:
 						default:
 						}
 					}
@@ -438,11 +438,12 @@ func (n *Node) RunRaftLoop() {
 				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
 				oldLogLength := len(n.log)
 				n.resetElectionTimeout()
-				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 				n.RaftMu.Unlock()
 
+				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
+
 				for _, peerID := range n.peers {
-					voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*300)
+					voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*50)
 					n.raftLoopWg.Add(1)
 					go n.sendVoteRequestToPeer(voteCtx, voteCancel, peerID, n.currentTerm, lastLogIndex, lastLogTerm)
 				}
@@ -515,6 +516,10 @@ func (n *Node) RunRaftLoop() {
 					n.dirtyPersistenceState = true
 					select {
 					case n.persistStateChan <- struct{}{}:
+					default:
+					}
+					select {
+					case n.replicatorSendNowChan[n.ID] <- struct{}{}:
 					default:
 					}
 				}
@@ -626,7 +631,7 @@ func (n *Node) RunRaftLoop() {
 
 func (n *Node) sendVoteRequestToPeers(currentTerm uint64, lastLogIndex uint64, lastLogTerm uint64) {
 	for _, peerID := range n.peers {
-		voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*300)
+		voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*50)
 		n.raftLoopWg.Add(1)
 		go n.sendVoteRequestToPeer(voteCtx, voteCancel, peerID, currentTerm, lastLogIndex, lastLogTerm)
 	}
