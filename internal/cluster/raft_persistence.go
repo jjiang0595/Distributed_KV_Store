@@ -89,17 +89,16 @@ func (n *Node) PersistRaftState() {
 		VotedFor:    n.votedFor,
 		Log:         logCopy,
 	}
-	n.RaftMu.Unlock()
 
 	err := n.WriteToDisk(savedState)
-	n.RaftMu.Lock()
 	if err != nil {
 		log.Printf("PersistRaftState: Error writing saved state to disk: %v", err)
 	} else {
 		log.Printf("PersistRaftState: Saved state to disk")
+		n.RaftMu.Lock()
 		n.dirtyPersistenceState = false
+		n.RaftMu.Unlock()
 	}
-	n.RaftMu.Unlock()
 }
 
 func (n *Node) WriteToDisk(savedState *PersistentState) error {
