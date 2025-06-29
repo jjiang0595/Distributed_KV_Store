@@ -35,6 +35,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 	s.mainNode.leaderID = req.LeaderId
 
 	if s.mainNode.state == Candidate {
+		s.mainNode.currentTerm = req.Term
 		s.mainNode.votedFor = ""
 		s.mainNode.votesReceived = make(map[string]bool)
 		s.mainNode.state = Follower
@@ -84,7 +85,6 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		s.mainNode.commitIndex = min(req.LeaderCommit, lastEntryIndex)
 		s.mainNode.applierCond.Broadcast()
 	}
-	log.Printf("Current log: %v", s.mainNode.log)
 	return &AppendEntriesResponse{Term: s.mainNode.currentTerm, Success: true}, nil
 }
 
