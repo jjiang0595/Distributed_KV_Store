@@ -140,7 +140,7 @@ func (n *Node) WriteToDisk(savedState *PersistentState) error {
 }
 
 func (n *Node) PersistStateGoroutine() {
-	ticker := n.Clock.NewTicker(50 * time.Millisecond)
+	ticker := n.Clock.NewTicker(100 * time.Millisecond)
 	defer func() {
 		n.persistWg.Done()
 	}()
