@@ -39,7 +39,7 @@ type PersistentState struct {
 type Command struct {
 	Type  CommandType
 	Key   string
-	Value []byte
+	Value string
 }
 
 type ListenerFactory func(address string) (net.Listener, error)
@@ -60,7 +60,7 @@ type Node struct {
 	dataDir  string `yaml:"data_dir"`
 
 	// KV Store data
-	data map[string][]byte
+	data map[string]string
 
 	// Raft
 	RaftMu sync.Mutex
