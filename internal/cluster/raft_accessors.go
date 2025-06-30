@@ -101,3 +101,7 @@ func (n *Node) GetDirtyPersistenceState() bool {
 	defer n.raftMu.Unlock()
 	return n.dirtyPersistenceState
 }
+
+func (n *Node) GetKVStore() *KVStore {
+	return n.kvStore
+}
