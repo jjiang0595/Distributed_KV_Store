@@ -544,42 +544,49 @@ ConflictingLogsCheck:
 	cleanup(t, testNodes)
 }
 
+func TestNodePartition_LeaderPartition(t *testing.T) {
+	testNodes, _, transport, clk := testSetup(t)
+	exitTicker := clk.NewTicker(500 * time.Millisecond)
+	checkTicker := clk.NewTicker(25 * time.Millisecond)
+
+	oldLeaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+
+	for _, peerID := range testNodes[oldLeaderID].peers {
+		transport.SetPartition(oldLeaderID, peerID, true)
+	}
 
 	majorityNodes := make(map[string]*Node)
 	for _, node := range testNodes {
-		if node.ID != leaderID {
+		if node.ID != oldLeaderID {
 			majorityNodes[node.ID] = node
 		}
 	}
 
-	findLeader(t, clk, majorityNodes, checkTicker, exitTicker)
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(1 * time.Second)
+	newLeaderID := findLeader(t, clk, majorityNodes, checkTicker, exitTicker)
 
-	for _, peerID := range testNodes[leaderID].peers {
-		leaderTransport, peerTransport := testNodes[leaderID].Transport.(*MockNetworkTransport), testNodes[peerID].Transport.(*MockNetworkTransport)
-		leaderTransport.PartitionNode(peerID, false)
-		peerTransport.PartitionNode(leaderID, false)
+	for _, peerID := range testNodes[oldLeaderID].peers {
+		transport.SetPartition(oldLeaderID, peerID, false)
 	}
 
 	exitTicker.Reset(5 * time.Second)
-	checkTicker.Reset(20 * time.Millisecond)
+	checkTicker.Reset(50 * time.Millisecond)
 	stepDown := false
 
 ReintroduceOldLeader:
 	for {
 		select {
 		case <-checkTicker.Chan():
-			for _, node := range testNodes {
-				if node.ID == leaderID && testNodes[leaderID].GetState() == Follower {
-					stepDown = true
-					break ReintroduceOldLeader
-				}
+			if testNodes[newLeaderID].GetState() == Leader && testNodes[oldLeaderID].GetState() == Follower {
+				stepDown = true
+				break ReintroduceOldLeader
 			}
 
 		case <-exitTicker.Chan():
-			for _, node := range testNodes {
-				if node.ID == leaderID && node.GetState() == Follower {
-					stepDown = true
-				}
+			if testNodes[newLeaderID].GetState() == Leader && testNodes[oldLeaderID].GetState() == Follower {
+				stepDown = true
+				break ReintroduceOldLeader
 			}
 			break ReintroduceOldLeader
 
