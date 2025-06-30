@@ -197,11 +197,14 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 
 	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
 
-	select {
-	case testNodes[leaderID].ClientCommandChan <- testCommand:
-		t.Logf("Sent Client Command from test")
-	case <-clk.After(3 * time.Second):
-		t.Fatalf("Client Command not received within 3 seconds")
+	cmdToBytes, err := json.Marshal(testCmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	replicationTicker := clk.NewTicker(50 * time.Millisecond)
@@ -278,15 +281,16 @@ LeaderFollowerSetup:
 		Value: "testValue",
 	}
 
-	select {
-	case testNodes[leaderID].ClientCommandChan <- testCommand:
-		t.Logf("Sent Client Command from test")
-	case <-clk.After(3 * time.Second):
-		log.Fatalf("Timed out sending client command")
+	cmdToBytes, err := json.Marshal(testCmd)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	exitTicker.Reset(10 * time.Second)
-	for len(testNodes[followerID].data) < 1 {
+	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 		select {
 		case <-exitTicker.Chan():
 			t.Fatalf("Leader not found within 5 secs")
