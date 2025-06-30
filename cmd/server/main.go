@@ -122,6 +122,29 @@ func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, ke
 	}
 }
 
+func (s *HTTPServer) handleGetRequest(w http.ResponseWriter, r *http.Request, key string) {
+	value, found := s.kvStore.Get(key)
+	if !found {
+		http.Error(w, "value not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/yaml")
+	w.WriteHeader(http.StatusOK)
+	yamlBytes, err := yaml.Marshal(value)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+	_, err = w.Write(yamlBytes)
+	if err != nil {
+		_ = fmt.Errorf("error writing response: %v", err)
+		return
+	}
+	_, err = fmt.Fprintf(w, "Sent a PUT request for %s", key)
+	if err != nil {
+		log.Printf("Error writing response: %v", err)
+	}
+}
+
 type Config struct {
 	Node struct {
 		ID       string `yaml:"id"`
