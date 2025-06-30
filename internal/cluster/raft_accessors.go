@@ -1,38 +1,36 @@
 package cluster
 
-func (n *Node) GetData() map[string][]byte {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
-	dataCopy := make(map[string][]byte, len(n.data))
+func (n *Node) GetData() map[string]string {
+	n.rwMu.RLock()
+	defer n.rwMu.Unlock()
+	dataCopy := make(map[string]string, len(n.data))
 	for k, v := range n.data {
-		valueCopy := make([]byte, len(v))
-		copy(valueCopy, v)
-		dataCopy[k] = valueCopy
+		dataCopy[k] = v
 	}
 	return dataCopy
 }
 
 func (n *Node) GetPeers() []string {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	return n.peers
 }
 
 func (n *Node) GetCurrentTerm() uint64 {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	return n.currentTerm
 }
 
 func (n *Node) GetVotedFor() string {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	return n.votedFor
 }
 
 func (n *Node) GetLog() []*LogEntry {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.rwMu.RLock()
+	defer n.rwMu.RUnlock()
 	logCopy := make([]*LogEntry, 0, len(n.log))
 	for _, logEntry := range n.log {
 		if logEntry != nil {
@@ -49,38 +47,38 @@ func (n *Node) GetLog() []*LogEntry {
 }
 
 func (n *Node) GetCommitIndex() uint64 {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	return n.commitIndex
 }
 
 func (n *Node) GetState() RaftState {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	return n.state
 }
 
 func (n *Node) GetLastApplied() uint64 {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	return n.lastApplied
 }
 
 func (n *Node) GetLeaderID() string {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	return n.leaderID
 }
 
 func (n *Node) GetVotesReceived() map[string]bool {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	return n.votesReceived
 }
 
 func (n *Node) GetNextIndex() map[string]uint64 {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.rwMu.RLock()
+	defer n.rwMu.RUnlock()
 	nextIndexCopy := make(map[string]uint64)
 	for k, v := range n.nextIndex {
 		nextIndexCopy[k] = v
@@ -89,8 +87,8 @@ func (n *Node) GetNextIndex() map[string]uint64 {
 }
 
 func (n *Node) GetMatchIndex() map[string]uint64 {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.rwMu.RLock()
+	defer n.rwMu.RUnlock()
 	matchIndexCopy := make(map[string]uint64)
 	for k, v := range n.matchIndex {
 		matchIndexCopy[k] = v
@@ -99,7 +97,7 @@ func (n *Node) GetMatchIndex() map[string]uint64 {
 }
 
 func (n *Node) GetDirtyPersistenceState() bool {
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	return n.dirtyPersistenceState
 }
