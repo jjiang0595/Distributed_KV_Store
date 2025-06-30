@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/jonboulle/clockwork"
 	"google.golang.org/grpc"
@@ -63,7 +62,8 @@ type Node struct {
 	data map[string]string
 
 	// Raft
-	RaftMu sync.Mutex
+	raftMu sync.Mutex
+	rwMu   sync.RWMutex
 
 	peers             []string
 	currentTerm       uint64            // Latest term server
@@ -80,9 +80,11 @@ type Node struct {
 	heartbeatTimeout  clockwork.Timer
 	electionTimeoutCh chan struct{}
 
+	applyChan                 chan ApplyMsg
 	appendEntriesChan         chan *AppendEntriesRequestWrapper
 	appendEntriesResponseChan chan *AppendEntriesResponseWrapper
-	ClientCommandChan         chan *Command
+	clientCommandChan         chan *ProposeRequest
+	pendingCommands           map[uint64]chan error
 	persistStateChan          chan struct{}
 	replicatorSendNowChan     map[string]chan struct{}
 	requestVoteChan           chan *RequestVoteRequestWrapper
@@ -110,6 +112,7 @@ type Node struct {
 	grpcListener    net.Listener
 	raftServer      *RaftServer
 	listenerFactory ListenerFactory
+	kvStore         *KVStore
 
 	minElectionTimeout int
 	maxElectionTimeout int
@@ -161,12 +164,12 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		Port:                      Port,
 		GrpcPort:                  GrpcPort,
 		grpcListener:              nil,
-		data:                      make(map[string][]byte),
 		votedFor:                  "",
 		peers:                     peerIDs,
 		currentTerm:               0,
 		dataDir:                   dataDir,
-		RaftMu:                    sync.Mutex{},
+		raftMu:                    sync.Mutex{},
+		rwMu:                      sync.RWMutex{},
 		log:                       make([]*LogEntry, 0),
 		commitIndex:               0,
 		state:                     Follower,
@@ -177,10 +180,12 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		matchIndex:                make(map[string]uint64),
 		electionTimeout:           nil,
 		grpcServer:                nil,
+		applyChan:                 make(chan ApplyMsg),
 		appendEntriesChan:         make(chan *AppendEntriesRequestWrapper, 1),
 		appendEntriesResponseChan: make(chan *AppendEntriesResponseWrapper),
-		ClientCommandChan:         make(chan *Command, 1),
+		clientCommandChan:         make(chan *ProposeRequest),
 		persistStateChan:          make(chan struct{}, 1),
+		pendingCommands:           make(map[uint64]chan error),
 		requestVoteChan:           make(chan *RequestVoteRequestWrapper, 1),
 		requestVoteResponseChan:   make(chan *RequestVoteResponse),
 		resetElectionTimeoutChan:  make(chan struct{}, 1),
@@ -191,6 +196,7 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		Clock:                     clk,
 		Transport:                 t,
 		listenerFactory:           lf,
+		kvStore:                   NewKVStore(),
 		minElectionTimeout:        minElectionTimeoutMs,
 		maxElectionTimeout:        maxElectionTimeoutMs,
 	}
