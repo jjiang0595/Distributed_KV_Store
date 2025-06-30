@@ -368,17 +368,182 @@ FollowerRecoveryCheck:
 func TestLogReplication_LogDivergence(t *testing.T) {
 	testNodes, _, transport, clk := testSetup(t)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
+	exitTicker := clk.NewTicker(500 * time.Millisecond)
 
 	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+	var followerID string
+	var followerNode *Node
 
-	for _, peerID := range testNodes[leaderID].peers {
-		leaderTransport, peerTransport := testNodes[leaderID].Transport.(*MockNetworkTransport), testNodes[peerID].Transport.(*MockNetworkTransport)
-		leaderTransport.PartitionNode(peerID, true)
-		peerTransport.PartitionNode(leaderID, true)
+	for _, node := range testNodes {
+		if node.GetState() == Follower {
+			followerID = node.ID
+			followerNode = node
+			break
+		}
 	}
 
-	exitTicker.Reset(500 * time.Millisecond)
-	checkTicker.Reset(25 * time.Millisecond)
+	leaderNode := testNodes[leaderID]
+	testCmdA := &Command{
+		Type:  CommandPut,
+		Key:   "key_A",
+		Value: "value_A",
+	}
+
+	cmdToBytes, err := json.Marshal(testCmdA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCmdB := &Command{
+		Type:  CommandPut,
+		Key:   "key_B",
+		Value: "value_B",
+	}
+
+	cmdToBytes, err = json.Marshal(testCmdB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checkTicker.Reset(100 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
+LogReplicationCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			if len(leaderNode.GetLog()) == len(followerNode.GetLog()) {
+				break LogReplicationCheck
+			}
+
+		case <-exitTicker.Chan():
+			log.Fatalf("Error: Logs not replicated within time limit")
+
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	for _, peerID := range testNodes[followerID].peers {
+		transport.SetPartition(followerID, peerID, true)
+		transport.SetPartition(peerID, followerID, true)
+	}
+
+	logEntryC := &LogEntry{
+		Term: followerNode.currentTerm + 1,
+		Index: func() uint64 {
+			if len(followerNode.log) == 0 {
+				return 0
+			}
+			return followerNode.log[len(followerNode.log)-1].Index + 1
+		}(),
+		Command: []byte("testCmdC"),
+	}
+	followerNode.raftMu.Lock()
+	followerNode.log = append(followerNode.log, logEntryC)
+	followerNode.raftMu.Unlock()
+
+	logEntryD := &LogEntry{
+		Term: logEntryC.Term,
+		Index: func() uint64 {
+			if len(followerNode.log) == 0 {
+				return 0
+			}
+			return followerNode.log[len(followerNode.log)-1].Index + 1
+		}(),
+		Command: []byte("testCmdD"),
+	}
+
+	followerNode.raftMu.Lock()
+	followerNode.log = append(followerNode.log, logEntryD)
+	followerNode.raftMu.Unlock()
+
+	for _, peerID := range testNodes[followerID].peers {
+		transport.SetPartition(followerID, peerID, false)
+		transport.SetPartition(peerID, followerID, false)
+	}
+
+	testCmdE := &Command{
+		Type:  CommandPut,
+		Key:   "key_E",
+		Value: "value_E",
+	}
+	marshalledCommandE, err := json.Marshal(testCmdE)
+	if err != nil {
+		return
+	}
+
+	err = testNodes[followerID].ProposeCommand(marshalledCommandE)
+	if err != nil {
+		return
+	}
+
+	for i := 0; i < 5; i++ {
+		clk.Advance(50 * time.Millisecond)
+		runtime.Gosched()
+	}
+
+	checkTicker.Reset(100 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
+
+	resolved := false
+
+ConflictingLogsCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			resolved = true
+			followerLog := followerNode.GetLog()
+			leaderLog := leaderNode.GetLog()
+			leaderData := leaderNode.kvStore.GetData()
+			followerData := followerNode.kvStore.GetData()
+
+			if len(followerLog) != len(leaderLog) || len(followerData) != len(leaderData) {
+				resolved = false
+				continue
+			}
+			for index, leaderEntry := range leaderLog {
+				if !compareLogs(leaderEntry, followerLog[index]) {
+					resolved = false
+					break
+				}
+			}
+			for leaderKey, leaderValue := range leaderData {
+				if value, ok := followerData[leaderKey]; !ok || leaderValue != value {
+					resolved = false
+					break
+				}
+			}
+			break ConflictingLogsCheck
+
+		case <-exitTicker.Chan():
+			resolved = false
+			break ConflictingLogsCheck
+
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	if !resolved {
+		t.Fatalf("Error: Follower's diverging log not resolved")
+	}
+
+	t.Logf("Success: Resolved diverging log entries")
+	cleanup(t, testNodes)
+}
+
 
 	majorityNodes := make(map[string]*Node)
 	for _, node := range testNodes {
