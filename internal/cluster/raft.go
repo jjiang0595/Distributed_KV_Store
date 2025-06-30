@@ -235,6 +235,8 @@ func (n *Node) Start() {
 
 func (n *Node) Shutdown() {
 	log.Printf("Initializing shutdown for %s", n.ID)
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 
 	if n.ctx != nil {
 		n.cancel()
@@ -293,7 +295,7 @@ func (n *Node) sendVoteRequestToPeer(voteCtx context.Context, voteCancel context
 			LastLogIndex: lastLogIndex,
 			LastLogTerm:  lastLogTerm,
 		}
-		response, err := n.Transport.SendRequestVote(voteCtx, peerID, voteRequest)
+		response, err := n.Transport.SendRequestVote(voteCtx, n.ID, peerID, voteRequest)
 		if err != nil {
 			log.Printf("Error requesting vote: %v", err)
 			return
