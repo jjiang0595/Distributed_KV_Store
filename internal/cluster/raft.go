@@ -407,10 +407,10 @@ func (n *Node) RunRaftLoop() {
 					}
 					log.Printf("Leader %s: Majority count: %d", n.ID, majorityCount)
 					if majorityCount >= (len(n.peers)+1)/2+1 {
-						n.RaftMu.Lock()
-						n.commitIndex = uint64(i) + 1
-						log.Printf("Committed Index is %v", n.commitIndex)
-						n.RaftMu.Unlock()
+						n.raftMu.Lock()
+						n.commitIndex = n.log[i].Index
+						log.Printf("%s Committed Index is %v", n.ID, n.commitIndex)
+						n.raftMu.Unlock()
 						n.applierCond.Broadcast()
 						break
 					}
