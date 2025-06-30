@@ -41,12 +41,12 @@ func (n *Node) LoadRaftState() error {
 	if err := decoder.Decode(&savedState); err != nil {
 		return fmt.Errorf("error decoding raft state: %v", err)
 	}
-	log.Printf("Saved State: %v", savedState)
-	n.RaftMu.Lock()
+	log.Printf("Saved State: %v", savedState.Log)
+	n.raftMu.Lock()
 	n.currentTerm = savedState.CurrentTerm
 	n.votedFor = savedState.VotedFor
 	n.log = savedState.Log
-	n.RaftMu.Unlock()
+	n.raftMu.Unlock()
 	return nil
 }
 
@@ -89,15 +89,16 @@ func (n *Node) PersistRaftState() {
 		VotedFor:    n.votedFor,
 		Log:         logCopy,
 	}
-
+	n.raftMu.Unlock()
+	
 	err := n.WriteToDisk(savedState)
 	if err != nil {
 		log.Printf("PersistRaftState: Error writing saved state to disk: %v", err)
 	} else {
 		log.Printf("PersistRaftState: Saved state to disk")
-		n.RaftMu.Lock()
+		n.raftMu.Lock()
 		n.dirtyPersistenceState = false
-		n.RaftMu.Unlock()
+		n.raftMu.Unlock()
 	}
 }
 
@@ -110,6 +111,12 @@ func (n *Node) WriteToDisk(savedState *PersistentState) error {
 
 	filePath := filepath.Join(n.dataDir, "raft_state.gob")
 	tmpFilePath := filePath + ".tmp"
+
+	dir := filepath.Dir(tmpFilePath)
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("error creating directory %s: %v", dir, err)
+	}
 
 	file, err := os.OpenFile(tmpFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
