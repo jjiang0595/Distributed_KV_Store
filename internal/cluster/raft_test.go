@@ -302,10 +302,10 @@ LeaderFollowerSetup:
 	deletedNode := testNodes[followerID]
 	testNodes[followerID].cancel()
 	go testNodes[followerID].Shutdown()
-	testNodes[followerID].WaitAllGoroutines()
-	delete(testNodes, followerID)
-	mockTransport := NewMockNetworkTransport(newCtx, followerID, testNodes)
-	testNodes[deletedNode.ID] = NewNode(
+	transport.UnregisterRPCServer(deletedNode)
+	deletedNode.WaitAllGoroutines()
+	delete(kvStores, followerID)
+	testNodes[followerID] = NewNode(
 		newCtx,
 		newCancel,
 		deletedNode.ID,
@@ -314,11 +314,13 @@ LeaderFollowerSetup:
 		deletedNode.GrpcPort,
 		deletedNode.dataDir,
 		deletedNode.peers,
-		deletedNode.Clock,
+		clk,
 		deletedNode.listenerFactory,
-		mockTransport,
+		transport,
 	)
-	testNodes[deletedNode.ID].Start()
+	transport.RegisterRPCServer(testNodes[followerID], testNodes[followerID].raftServer)
+	kvStores[followerID] = testNodes[followerID].kvStore
+	testNodes[followerID].Start()
 
 	exitTicker.Reset(5 * time.Second)
 	checkTicker.Reset(50 * time.Millisecond)
