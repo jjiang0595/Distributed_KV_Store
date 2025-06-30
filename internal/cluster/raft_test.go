@@ -184,10 +184,10 @@ CrashLeader:
 }
 
 func TestLogReplication_LeaderCommand(t *testing.T) {
-	testCommand := &Command{
+	testCmd := &Command{
 		Type:  CommandPut,
 		Key:   "testKey",
-		Value: []byte("testValue"),
+		Value: "testValue",
 	}
 
 	testNodes, _, _, clk := testSetup(t)
@@ -272,10 +272,10 @@ LeaderFollowerSetup:
 		}
 	}
 
-	testCommand := &Command{
-		Type:  "PUT",
+	testCmd := &Command{
+		Type:  CommandPut,
 		Key:   "testKey",
-		Value: []byte("testValue"),
+		Value: "testValue",
 	}
 
 	select {
