@@ -285,7 +285,6 @@ func (n *Node) ProposeCommand(cmdBytes []byte) error {
 		}
 		return fmt.Errorf("not leader")
 	}
-
 	proposeReq := &ProposeRequest{
 		Command: cmdBytes,
 		errorCh: make(chan error, 1),
@@ -299,7 +298,7 @@ func (n *Node) ProposeCommand(cmdBytes []byte) error {
 			return fmt.Errorf("timed out waiting for propose command")
 		}
 	case <-n.Clock.After(500 * time.Millisecond):
-		return fmt.Errorf("failed to send propose command to raft loop")
+		return fmt.Errorf("timed out waiting to send propose command to raft loop")
 	}
 }
 
