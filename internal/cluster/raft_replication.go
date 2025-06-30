@@ -9,13 +9,13 @@ import (
 
 func (n *Node) StartReplicators() {
 	log.Printf("Starting replicators at time %v", n.Clock.Now())
-	n.RaftMu.Lock()
+	n.raftMu.Lock()
 	n.replicatorCancel = make(map[string]context.CancelFunc)
 	n.replicatorSendNowChan = make(map[string]chan struct{})
-	n.RaftMu.Unlock()
+	n.raftMu.Unlock()
 
 	for _, peerID := range n.peers {
-		n.RaftMu.Lock()
+		n.raftMu.Lock()
 		replicatorCtx, replicatorCancel := context.WithCancel(n.ctx)
 		n.replicatorCancel[peerID] = replicatorCancel
 		ch := make(chan struct{}, 1)
@@ -30,12 +30,11 @@ func (n *Node) StopReplicators() {
 	for _, replicatorCancel := range n.replicatorCancel {
 		replicatorCancel()
 	}
-	n.replicatorSendNowChan = nil
 	n.replicatorCancel = nil
 }
 
 func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID string) (bool, error) {
-	n.RaftMu.Lock()
+	n.raftMu.Lock()
 	term, leaderID, commitIndex := n.currentTerm, n.leaderID, n.commitIndex
 	logSnapshot := make([]*LogEntry, 0, len(n.log))
 	for _, entry := range n.log {
@@ -50,7 +49,7 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 		}
 	}
 	peerNextIndex, ok := n.nextIndex[followerID]
-	n.RaftMu.Unlock()
+	n.raftMu.Unlock()
 	if !ok {
 		if len(logSnapshot) == 0 {
 			peerNextIndex = 1
@@ -80,7 +79,7 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 	}
 	replicateCtx, replicateCancel := context.WithTimeout(stopCtx, 200*time.Millisecond)
 	//log.Printf("Leader %s: ReplicateToFollower sending logs to %v at time %v", leaderID, followerID, n.Clock.Now())
-	response, err := n.Transport.SendAppendEntries(replicateCtx, followerID, &AppendEntriesRequest{
+	response, err := n.Transport.SendAppendEntries(replicateCtx, n.ID, followerID, &AppendEntriesRequest{
 		Term:         term,
 		LeaderId:     leaderID,
 		PrevLogIndex: prevLogIndex,

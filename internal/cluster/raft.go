@@ -194,7 +194,7 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		minElectionTimeout:        minElectionTimeoutMs,
 		maxElectionTimeout:        maxElectionTimeoutMs,
 	}
-	node.applierCond = sync.NewCond(&node.RaftMu)
+	node.applierCond = sync.NewCond(&node.raftMu)
 
 	node.grpcServer = grpc.NewServer()
 	node.raftServer = NewRaftServer(node)
@@ -362,7 +362,7 @@ func (n *Node) RunRaftLoop() {
 				return
 			case wrappedResp := <-n.appendEntriesResponseChan:
 				log.Printf("Leader %s: Received the Append Entries Response %v", n.ID, wrappedResp)
-				n.RaftMu.Lock()
+				n.raftMu.Lock()
 				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
 				oldLogLength := len(n.log)
 
@@ -377,7 +377,7 @@ func (n *Node) RunRaftLoop() {
 					n.resetElectionTimeout()
 					n.StopReplicators()
 					log.Printf("Leader %s: Stepping down", n.ID)
-					n.RaftMu.Unlock()
+					n.raftMu.Unlock()
 					n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 					continue
 				}
@@ -399,7 +399,7 @@ func (n *Node) RunRaftLoop() {
 					}
 					continue
 				}
-				n.RaftMu.Unlock()
+				n.raftMu.Unlock()
 				// Update Leader's Commit Index
 				for i := len(n.GetLog()) - 1; i >= 0; i-- {
 					if n.GetCurrentTerm() != n.log[i].GetTerm() {
@@ -464,12 +464,12 @@ func (n *Node) RunRaftLoop() {
 				log.Printf("Candidate %s: Shutting down", n.ID)
 				return
 			case <-n.resetElectionTimeoutChan:
-				n.RaftMu.Lock()
+				n.raftMu.Lock()
 				n.resetElectionTimeout()
-				n.RaftMu.Unlock()
+				n.raftMu.Unlock()
 
 			case <-n.electionTimeout.Chan():
-				n.RaftMu.Lock()
+				n.raftMu.Lock()
 				n.currentTerm += 1
 				n.votedFor = n.ID
 				n.votesReceived = make(map[string]bool)
@@ -489,7 +489,7 @@ func (n *Node) RunRaftLoop() {
 				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
 				oldLogLength := len(n.log)
 				n.resetElectionTimeout()
-				n.RaftMu.Unlock()
+				n.raftMu.Unlock()
 
 				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 
@@ -533,7 +533,7 @@ func (n *Node) RunRaftLoop() {
 			case reqVoteRespWrapper := <-n.requestVoteResponseChan:
 				n.raftServer.ReceiveVote(reqVoteRespWrapper)
 
-				n.RaftMu.Lock()
+				n.raftMu.Lock()
 				votesReceivedLen, totalNodes := len(n.votesReceived), len(n.peers)+1
 
 				if uint64(votesReceivedLen) >= uint64(totalNodes/2)+1 {
@@ -557,7 +557,7 @@ func (n *Node) RunRaftLoop() {
 						Term: n.currentTerm,
 						Index: func() uint64 {
 							if len(n.log) == 0 {
-								return 1
+								return 0
 							}
 							return n.log[len(n.log)-1].Index + 1
 						}(),
@@ -574,7 +574,7 @@ func (n *Node) RunRaftLoop() {
 					default:
 					}
 				}
-				n.RaftMu.Unlock()
+				n.raftMu.Unlock()
 			}
 
 		case Follower:
@@ -584,11 +584,11 @@ func (n *Node) RunRaftLoop() {
 				log.Printf("Follower %s: Shutting down", n.ID)
 				return
 			case <-n.resetElectionTimeoutChan:
-				n.RaftMu.Lock()
+				n.raftMu.Lock()
 				n.resetElectionTimeout()
-				n.RaftMu.Unlock()
+				n.raftMu.Unlock()
 			case <-n.electionTimeout.Chan():
-				n.RaftMu.Lock()
+				n.raftMu.Lock()
 				//log.Printf("%s: Follower -> Candidate: Time %v", n.ID, n.Clock.Now())
 				log.Printf("%s: Follower -> Candidate", n.ID)
 				n.state = Candidate
@@ -612,12 +612,12 @@ func (n *Node) RunRaftLoop() {
 				oldLogLength := len(n.log)
 				n.resetElectionTimeout()
 				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
-				n.RaftMu.Unlock()
+				n.raftMu.Unlock()
 
 				go n.sendVoteRequestToPeers(n.currentTerm, lastLogIndex, lastLogTerm)
 
 			case <-n.electionTimeoutCh:
-				n.RaftMu.Lock()
+				n.raftMu.Lock()
 				//log.Printf("%s: Follower -> Candidate: Time %v", n.ID, n.Clock.Now())
 				log.Printf("%s: Follower -> Candidate", n.ID)
 				runtime.Gosched()
@@ -642,7 +642,7 @@ func (n *Node) RunRaftLoop() {
 				oldLogLength := len(n.log)
 				n.resetElectionTimeout()
 				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
-				n.RaftMu.Unlock()
+				n.raftMu.Unlock()
 
 				go n.sendVoteRequestToPeers(n.currentTerm, lastLogIndex, lastLogTerm)
 

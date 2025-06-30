@@ -7,8 +7,8 @@ import (
 
 func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	//log.Printf("Processing AppendEntries Request at time %v", s.mainNode.Clock.Now())
-	s.mainNode.RaftMu.Lock()
-	defer s.mainNode.RaftMu.Unlock()
+	s.mainNode.raftMu.Lock()
+	defer s.mainNode.raftMu.Unlock()
 
 	oldTerm, oldVotedFor := s.mainNode.currentTerm, s.mainNode.votedFor
 	oldLogLength := len(s.mainNode.log)
@@ -90,8 +90,8 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 
 func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteRequest) (*RequestVoteResponse, error) {
 	//log.Printf("Candidate %s: Processing vote request for %s at time %v", req.CandidateId, s.mainNode.ID, s.mainNode.Clock.Now())
-	s.mainNode.RaftMu.Lock()
-	defer s.mainNode.RaftMu.Unlock()
+	s.mainNode.raftMu.Lock()
+	defer s.mainNode.raftMu.Unlock()
 
 	oldTerm, oldVotedFor := s.mainNode.currentTerm, s.mainNode.votedFor
 	oldLogLength := len(s.mainNode.log)
@@ -141,8 +141,8 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 }
 
 func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
-	s.mainNode.RaftMu.Lock()
-	defer s.mainNode.RaftMu.Unlock()
+	s.mainNode.raftMu.Lock()
+	defer s.mainNode.raftMu.Unlock()
 	candidateTerm, voterTerm, voteGranted := s.mainNode.currentTerm, req.Term, req.VoteGranted
 	oldTerm, oldVotedFor := s.mainNode.currentTerm, s.mainNode.votedFor
 	oldLogLength := len(s.mainNode.log)
