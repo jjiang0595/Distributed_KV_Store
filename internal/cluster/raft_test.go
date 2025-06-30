@@ -217,10 +217,13 @@ ReplicationCheck:
 		case <-replicationTicker.Chan():
 			replicated = true
 			for _, node := range testNodes {
-				if value, ok := node.GetData()[testCommand.Key]; !ok || !bytes.Equal(value, testCommand.Value) {
+				node.kvStore.mu.Lock()
+				if value, ok := node.kvStore.store[testCmd.Key]; !ok || value != testCmd.Value {
 					replicated = false
+					node.kvStore.mu.Unlock()
 					break
 				}
+				node.kvStore.mu.Unlock()
 			}
 			if replicated {
 				break ReplicationCheck
@@ -292,6 +295,11 @@ LeaderFollowerSetup:
 	}
 
 		select {
+		case <-checkTicker.Chan():
+			if len(testNodes[followerID].kvStore.GetData()) == 1 {
+				//log.Printf("FOLLOWER %v: LOG %v", followerID, testNodes[followerID].GetLog())
+				break LeaderCheck
+			}
 		case <-exitTicker.Chan():
 			t.Fatalf("Leader not found within 5 secs")
 		default:
@@ -335,16 +343,19 @@ FollowerRecoveryCheck:
 		select {
 		case <-checkTicker.Chan():
 			recovered = true
-			if testNodes[followerID].GetCommitIndex() != testNodes[leaderID].GetCommitIndex() {
+
+			followerCommitIndex := testNodes[followerID].GetCommitIndex()
+			followerData := testNodes[followerID].kvStore.GetData()
+
+			leaderCommitIndex := testNodes[leaderID].GetCommitIndex()
+			leaderData := testNodes[leaderID].kvStore.GetData()
+
+			if len(leaderData) != len(followerData) || followerCommitIndex != leaderCommitIndex {
 				recovered = false
 				continue
 			}
-			if len(testNodes[followerID].data) != len(testNodes[deletedNode.ID].data) {
-				recovered = false
-				continue
-			}
-			for leaderKey, leaderValue := range testNodes[leaderID].data {
-				if value, ok := testNodes[followerID].data[leaderKey]; !ok || !bytes.Equal(leaderValue, value) {
+			for leaderKey, leaderValue := range leaderData {
+				if value, ok := testNodes[followerID].kvStore.Get(leaderKey); !ok || value != leaderValue {
 					recovered = false
 					break
 				}
