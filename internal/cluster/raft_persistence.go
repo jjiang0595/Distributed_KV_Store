@@ -69,21 +69,9 @@ func (n *Node) PersistRaftState() {
 		return
 	}
 
-	n.RaftMu.Lock()
-	logCopy := make([]*LogEntry, 0, len(n.log))
-	for _, entry := range n.log {
-		if entry != nil {
-			entryCopy := &LogEntry{
-				Term:    entry.Term,
-				Index:   entry.Index,
-				Command: make([]byte, len(entry.Command)),
-			}
-			copy(entryCopy.Command, entry.Command)
+	logCopy := n.GetLog()
 
-			logCopy = append(logCopy, entryCopy)
-		}
-	}
-
+	n.raftMu.Lock()
 	savedState := &PersistentState{
 		CurrentTerm: n.currentTerm,
 		VotedFor:    n.votedFor,
