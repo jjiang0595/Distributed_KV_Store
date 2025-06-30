@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,8 @@ type gRPCTransport struct {
 	clients    map[string]RaftServiceClient
 	conns      map[string]*grpc.ClientConn
 	rpcTimeout time.Duration
+	mu         sync.Mutex
+	rwMu       sync.RWMutex
 }
 
 func NewGRPCTransport(peerAddresses map[string]string) (NetworkTransport, error) {
@@ -41,6 +44,9 @@ func NewGRPCTransport(peerAddresses map[string]string) (NetworkTransport, error)
 }
 
 func (t *gRPCTransport) SendAppendEntries(ctx context.Context, startId string, endId string, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+	t.rwMu.RLock()
+	client, ok := t.clients[endId]
+	t.rwMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("invalid PeerID %s", endId)
 	}
@@ -53,6 +59,9 @@ func (t *gRPCTransport) SendAppendEntries(ctx context.Context, startId string, e
 }
 
 func (t *gRPCTransport) SendRequestVote(ctx context.Context, startId string, endId string, req *RequestVoteRequest) (*RequestVoteResponse, error) {
+	t.rwMu.RLock()
+	client, ok := t.clients[endId]
+	t.rwMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("invalid PeerID %s", endId)
 	}
@@ -65,6 +74,9 @@ func (t *gRPCTransport) SendRequestVote(ctx context.Context, startId string, end
 }
 
 func (t *gRPCTransport) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	
 	var errs []string
 	for _, conn := range t.conns {
 		if conn != nil {
