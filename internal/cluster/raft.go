@@ -144,6 +144,10 @@ type RaftServer struct {
 	mainNode *Node
 }
 
+func (s *RaftServer) Close() error {
+	return nil
+}
+
 func NewRaftServer(mainNode *Node) *RaftServer {
 	return &RaftServer{
 		mainNode: mainNode,
