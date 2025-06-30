@@ -415,26 +415,41 @@ func (n *Node) RunRaftLoop() {
 						break
 					}
 				}
-			case clientReq := <-n.ClientCommandChan:
+			case clientReq := <-n.clientCommandChan:
 				log.Printf("Client Request Received: %v", clientReq)
-				commandBytes, err := json.Marshal(clientReq)
-				if err != nil {
-					log.Printf("Error marshalling command to bytes: %v", err)
-					continue
-				}
+				commandBytes := clientReq.Command
+
+				n.raftMu.Lock()
 				entry := &LogEntry{
-					Term:    n.GetCurrentTerm(),
-					Index:   uint64(len(n.GetLog())) + 1,
+					Term: n.currentTerm,
+					Index: func() uint64 {
+						if len(n.log) == 0 {
+							return 0
+						}
+						return uint64(n.log[len(n.log)-1].Index) + 1
+					}(),
 					Command: commandBytes,
 				}
-				n.RaftMu.Lock()
+
+				n.pendingCommands[entry.Index] = clientReq.errorCh
 				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
 				oldLogLength := len(n.log)
 				n.log = append(n.log, entry)
-				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
-				n.RaftMu.Unlock()
 
-				log.Printf("Node %s: Successfully appended log entry", n.ID)
+				n.matchIndex[n.ID] = entry.Index
+				n.nextIndex[n.ID] = entry.Index + 1
+
+				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
+				n.raftMu.Unlock()
+
+				for peerID, peerSendCh := range n.replicatorSendNowChan {
+					select {
+					case peerSendCh <- struct{}{}:
+						log.Printf("Leader %s: Signal replicator to send log entry to %v", n.ID, peerID)
+					default:
+						log.Printf("Leader %s: Replicator is blocked while sending to %v.", n.ID, peerID)
+					}
+				}
 			}
 		case Candidate:
 			log.Printf("------------------------Candidate---------------------------------")
