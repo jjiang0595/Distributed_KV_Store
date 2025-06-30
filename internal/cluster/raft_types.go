@@ -27,6 +27,10 @@ type Command struct {
 	Value string
 }
 
+type PutRequest struct {
+	Value string `json:"value"`
+}
+
 type ListenerFactory func(address string) (net.Listener, error)
 
 type ProposeRequest struct {
