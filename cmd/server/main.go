@@ -80,6 +80,48 @@ func (s *HTTPServer) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, key string) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var value cluster.PutRequest
+	if err := json.Unmarshal(body, &value); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	putCmd := &cluster.Command{
+		Type:  cluster.CommandPut,
+		Key:   key,
+		Value: value.Value,
+	}
+	var cmdToBytes []byte
+	cmdToBytes, err = json.Marshal(putCmd)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err = s.proposeCommand(cmdToBytes)
+	if err != nil {
+		if strings.Contains(err.Error(), "not leader, current leader is ") {
+			leaderID := strings.TrimPrefix(err.Error(), "not leader, current leader is ")
+			http.Redirect(w, r, fmt.Sprintf("http://%s/%s", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
+		} else if strings.Contains(err.Error(), "timed out") {
+			http.Error(w, fmt.Sprintf("Client request timed out: %v", err), http.StatusRequestTimeout)
+		} else {
+			http.Error(w, fmt.Sprintf("Internal server error: %v", err), http.StatusInternalServerError)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write([]byte(fmt.Sprintf("Successfully put %s %s", key, string(body))))
+	if err != nil {
+		log.Printf("error logging PUT success message")
+	}
+}
+
 type Config struct {
 	Node struct {
 		ID       string `yaml:"id"`
