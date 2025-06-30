@@ -13,8 +13,7 @@ import (
 	"time"
 )
 
-type RaftState string
-type CommandType string
+const CommandPut CommandType = "put"
 
 const (
 	Follower  RaftState = "follower"
@@ -22,34 +21,10 @@ const (
 	Leader    RaftState = "leader"
 )
 
-const CommandPut CommandType = "put"
-
 const (
 	minElectionTimeoutMs = 150
 	maxElectionTimeoutMs = 300
 )
-
-type PersistentState struct {
-	CurrentTerm uint64
-	VotedFor    string
-	Log         []*LogEntry
-}
-
-type Command struct {
-	Type  CommandType
-	Key   string
-	Value string
-}
-
-type ListenerFactory func(address string) (net.Listener, error)
-
-func ProdListenerFactory(address string) (net.Listener, error) {
-	return net.Listen("tcp", address)
-}
-
-func MockListenerFactory(address string) (net.Listener, error) {
-	return NewMockListener(address), nil
-}
 
 type Node struct {
 	ID       string `yaml:"id"`
@@ -118,28 +93,12 @@ type Node struct {
 	maxElectionTimeout int
 }
 
-type NodeMap struct {
-	Nodes []*Node
+func ProdListenerFactory(address string) (net.Listener, error) {
+	return net.Listen("tcp", address)
 }
 
-type AppendEntriesRequestWrapper struct {
-	Ctx      context.Context
-	Request  *AppendEntriesRequest
-	Response chan *AppendEntriesResponse
-}
-
-type AppendEntriesResponseWrapper struct {
-	Response     *AppendEntriesResponse
-	Error        error
-	PeerID       string
-	PrevLogIndex uint64
-	SentEntries  []*LogEntry
-}
-
-type RequestVoteRequestWrapper struct {
-	Ctx      context.Context
-	Request  *RequestVoteRequest
-	Response chan *RequestVoteResponse
+func MockListenerFactory(address string) (net.Listener, error) {
+	return NewMockListener(address), nil
 }
 
 type RaftServer struct {
@@ -317,11 +276,6 @@ func (n *Node) sendVoteRequestToPeer(voteCtx context.Context, voteCancel context
 			return
 		}
 	}
-}
-
-type ProposeRequest struct {
-	Command []byte
-	errorCh chan error
 }
 
 func (n *Node) ProposeCommand(cmdBytes []byte) error {
