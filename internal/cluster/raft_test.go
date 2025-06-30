@@ -158,7 +158,7 @@ CrashLeader:
 					go node.Shutdown()
 					node.WaitAllGoroutines()
 					runtime.Gosched()
-					mockTransport := NewMockNetworkTransport(newCtx, node.ID, testNodes)
+					mockTransport := NewMockNetworkTransport(newCtx)
 					testNodes[node.ID] = NewNode(newCtx, newCancel, crashedNode.ID, crashedNode.Address, crashedNode.Port, crashedNode.GrpcPort, crashedNode.dataDir, crashedNode.peers, crashedNode.Clock, MockListenerFactory, mockTransport)
 					testNodes[node.ID].Start()
 					break CrashLeader
@@ -207,6 +207,8 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	checkTicker.Reset(100 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	replicationTicker := clk.NewTicker(50 * time.Millisecond)
 	defer replicationTicker.Stop()
 
@@ -294,6 +296,10 @@ LeaderFollowerSetup:
 		t.Fatal(err)
 	}
 
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(1 * time.Second)
+LeaderCheck:
+	for {
 		select {
 		case <-checkTicker.Chan():
 			if len(testNodes[followerID].kvStore.GetData()) == 1 {
@@ -381,7 +387,6 @@ FollowerRecoveryCheck:
 	cleanup(t, testNodes)
 }
 
-	exitTicker := clk.NewTicker(500 * time.Millisecond)
 func TestLogReplication_LogDivergence(t *testing.T) {
 	testNodes, _, transport, clk := testSetup(t)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
