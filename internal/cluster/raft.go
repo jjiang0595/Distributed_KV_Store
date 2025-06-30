@@ -307,6 +307,36 @@ func (n *Node) sendVoteRequestToPeer(voteCtx context.Context, voteCancel context
 	}
 }
 
+type ProposeRequest struct {
+	Command []byte
+	errorCh chan error
+}
+
+func (n *Node) ProposeCommand(cmdBytes []byte) error {
+	if n.GetState() != Leader {
+		if n.GetLeaderID() != "" {
+			return fmt.Errorf("not leader, current leader is %s", n.leaderID)
+		}
+		return fmt.Errorf("not leader")
+	}
+
+	proposeReq := &ProposeRequest{
+		Command: cmdBytes,
+		errorCh: make(chan error, 1),
+	}
+	select {
+	case n.clientCommandChan <- proposeReq:
+		select {
+		case err := <-proposeReq.errorCh:
+			return err
+		case <-n.Clock.After(500 * time.Millisecond):
+			return fmt.Errorf("timed out waiting for propose command")
+		}
+	case <-n.Clock.After(500 * time.Millisecond):
+		return fmt.Errorf("failed to send propose command to raft loop")
+	}
+}
+
 func (n *Node) RunRaftLoop() {
 	log.Printf("Node %s: Starting Raft", n.ID)
 	defer func() {
