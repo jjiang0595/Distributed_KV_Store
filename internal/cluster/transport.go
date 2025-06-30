@@ -11,8 +11,8 @@ import (
 )
 
 type NetworkTransport interface {
-	SendAppendEntries(ctx context.Context, peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error)
-	SendRequestVote(ctx context.Context, peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error)
+	SendAppendEntries(ctx context.Context, startId string, endId string, req *AppendEntriesRequest) (*AppendEntriesResponse, error)
+	SendRequestVote(ctx context.Context, startId string, endId string, req *RequestVoteRequest) (*RequestVoteResponse, error)
 	Close() error
 }
 
@@ -40,28 +40,26 @@ func NewGRPCTransport(peerAddresses map[string]string) (NetworkTransport, error)
 	return t, nil
 }
 
-func (t *gRPCTransport) SendAppendEntries(ctx context.Context, peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
-	client, ok := t.clients[peerID]
+func (t *gRPCTransport) SendAppendEntries(ctx context.Context, startId string, endId string, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	if !ok {
-		return nil, fmt.Errorf("invalid PeerID %s", peerID)
+		return nil, fmt.Errorf("invalid PeerID %s", endId)
 	}
 
 	resp, err := client.AppendEntries(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("error sending AppendEntries to %s: %w", peerID, err)
+		return nil, fmt.Errorf("error sending AppendEntries to %s: %w", endId, err)
 	}
 	return resp, nil
 }
 
-func (t *gRPCTransport) SendRequestVote(ctx context.Context, peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error) {
-	client, ok := t.clients[peerID]
+func (t *gRPCTransport) SendRequestVote(ctx context.Context, startId string, endId string, req *RequestVoteRequest) (*RequestVoteResponse, error) {
 	if !ok {
-		return nil, fmt.Errorf("invalid PeerID %s", peerID)
+		return nil, fmt.Errorf("invalid PeerID %s", endId)
 	}
 
 	res, err := client.RequestVote(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("error sending RequestVote to %s: %w", peerID, err)
+		return nil, fmt.Errorf("error sending RequestVote to %s: %w", endId, err)
 	}
 	return res, nil
 }
