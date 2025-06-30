@@ -8,48 +8,74 @@ import (
 )
 
 type MockNetworkTransport struct {
-	ctx       context.Context
-	nodeID    string
-	peerNodes map[string]*Node
-
-	mu               sync.Mutex
-	partitionedNodes map[string]struct{}
+	networkCtx    context.Context
+	networkCancel context.CancelFunc
+	rpcServers    map[string]RaftRPCServer
+	mu            sync.Mutex
+	rwMu          sync.RWMutex
+	partitions    map[string]map[string]bool
 }
 
-func NewMockNetworkTransport(ctx context.Context, nodeID string, peerNodes map[string]*Node) NetworkTransport {
+func NewMockNetworkTransport(ctx context.Context) *MockNetworkTransport {
+	networkCtx, networkCancel := context.WithCancel(ctx)
 	return &MockNetworkTransport{
-		ctx:              ctx,
-		nodeID:           nodeID,
-		peerNodes:        peerNodes,
-		partitionedNodes: make(map[string]struct{}),
+		networkCtx:    networkCtx,
+		networkCancel: networkCancel,
+		rpcServers:    make(map[string]RaftRPCServer),
+		partitions:    make(map[string]map[string]bool),
 	}
 }
 
-func (m *MockNetworkTransport) PartitionNode(nodeID string, isPartitioned bool) {
+func (m *MockNetworkTransport) RegisterRPCServer(node *Node, server RaftRPCServer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if isPartitioned {
-		m.partitionedNodes[nodeID] = struct{}{}
-	} else {
-		delete(m.partitionedNodes, nodeID)
-	}
+	m.rpcServers[node.ID] = server
 }
 
-func (m *MockNetworkTransport) SendAppendEntries(appendCtx context.Context, peerID string, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+func (m *MockNetworkTransport) UnregisterRPCServer(node *Node) {
 	m.mu.Lock()
-	_, isPartitioned := m.partitionedNodes[peerID]
+	defer m.mu.Unlock()
+	delete(m.rpcServers, node.ID)
+}
+
+func (m *MockNetworkTransport) SetPartition(startId string, endId string, isPartitioned bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.partitions[startId]; !ok {
+		m.partitions[startId] = make(map[string]bool)
+	}
+	m.partitions[startId][endId] = isPartitioned
+
+	if _, ok := m.partitions[endId]; !ok {
+		m.partitions[endId] = make(map[string]bool)
+	}
+	m.partitions[endId][startId] = isPartitioned
+}
+
+func (m *MockNetworkTransport) IsPartitioned(startId string, endId string) bool {
+	m.rwMu.RLock()
+	defer m.rwMu.RUnlock()
+	if innerMap, ok := m.partitions[startId]; !ok || innerMap != nil {
+		if isPartitioned, ok := innerMap[endId]; ok {
+			return isPartitioned
+		}
+	}
+	return false
+}
+
+func (m *MockNetworkTransport) SendAppendEntries(ctx context.Context, startId string, endId string, req *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+	if m.IsPartitioned(startId, endId) {
+		return nil, fmt.Errorf("node %s to node %s is partitioned", startId, endId)
+	}
+	m.mu.Lock()
+	rpcServer, ok := m.rpcServers[endId]
 	m.mu.Unlock()
-
-	if isPartitioned {
-		return nil, fmt.Errorf("node %s is partitioned", peerID)
-	}
-	peer, ok := m.peerNodes[peerID]
 	if !ok {
-		return nil, fmt.Errorf("peer not found %s", peerID)
+		return nil, fmt.Errorf("%s's rpc server not found", endId)
 	}
 
-	mockServer := NewRaftServer(peer)
-	res, err := mockServer.AppendEntries(appendCtx, req)
+	res, err := rpcServer.AppendEntries(ctx, req)
 	runtime.Gosched()
 	if err != nil {
 		return nil, err
@@ -57,21 +83,18 @@ func (m *MockNetworkTransport) SendAppendEntries(appendCtx context.Context, peer
 	return res, nil
 }
 
-func (m *MockNetworkTransport) SendRequestVote(requestCtx context.Context, peerID string, req *RequestVoteRequest) (*RequestVoteResponse, error) {
+func (m *MockNetworkTransport) SendRequestVote(ctx context.Context, startId string, endId string, req *RequestVoteRequest) (*RequestVoteResponse, error) {
+	if m.IsPartitioned(startId, endId) {
+		return nil, fmt.Errorf("node %s to node %s is partitioned", startId, endId)
+	}
 	m.mu.Lock()
-	_, isPartitioned := m.partitionedNodes[peerID]
+	rpcServer, ok := m.rpcServers[endId]
 	m.mu.Unlock()
-
-	if isPartitioned {
-		return nil, fmt.Errorf("node %s is partitioned", peerID)
-	}
-	peer, ok := m.peerNodes[peerID]
 	if !ok {
-		return nil, fmt.Errorf("peer not found %s", peerID)
+		return nil, fmt.Errorf("%s's rpc server not found", endId)
 	}
 
-	mockServer := NewRaftServer(peer)
-	res, err := mockServer.RequestVote(requestCtx, req)
+	res, err := rpcServer.RequestVote(ctx, req)
 	runtime.Gosched()
 	if err != nil {
 		return nil, err
@@ -80,5 +103,6 @@ func (m *MockNetworkTransport) SendRequestVote(requestCtx context.Context, peerI
 }
 
 func (m *MockNetworkTransport) Close() error {
+	m.networkCancel()
 	return nil
 }
