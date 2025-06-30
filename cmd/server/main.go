@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"distributed_kv_store/internal/cluster"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/jonboulle/clockwork"
@@ -13,8 +15,70 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
 )
+
+type HTTPServer struct {
+	nodeID            string
+	kvStore           *cluster.KVStore
+	proposeCommand    func(cmd []byte) error
+	server            *http.Server
+	port              int
+	peerHTTPAddresses map[string]string
+}
+
+func NewHTTPServer(nodeID string, kvStore *cluster.KVStore, proposeCmd func(cmd []byte) error, peerHTTPAddresses map[string]string, port int) *HTTPServer {
+	return &HTTPServer{
+		nodeID:            nodeID,
+		kvStore:           kvStore,
+		proposeCommand:    proposeCmd,
+		port:              port,
+		peerHTTPAddresses: peerHTTPAddresses,
+	}
+}
+
+func (s *HTTPServer) Start() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/key/", s.handleKeyRequest)
+	s.server = &http.Server{
+		Addr:    fmt.Sprintf(":%d", s.port),
+		Handler: mux,
+	}
+
+	go func() {
+		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("%s HTTP Server Failed: %v", s.nodeID, err)
+		}
+	}()
+}
+
+func (s *HTTPServer) Stop() {
+	if s.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := s.server.Shutdown(ctx); err != nil {
+			log.Printf("%s HTTP Server Shutdown Failed: %v", s.nodeID, err)
+		}
+	}
+}
+
+func (s *HTTPServer) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Path[len("/key/"):]
+
+	if key == "" {
+		http.Error(w, "key not found", http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case "PUT":
+		s.handlePutRequest(w, r, key)
+	default:
+		s.handleGetRequest(w, r, key)
+	}
+}
 
 type Config struct {
 	Node struct {
@@ -89,74 +153,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	node := cluster.NewNode(ctx, cancel, cfg.Node.ID, cfg.Node.Address, port, gRpcPort, cfg.Node.DataDir, peerIDs, clk, cluster.ProdListenerFactory, t)
+	serverAddr := NewHTTPServer(node.ID, node.GetKVStore(), node.ProposeCommand, peerHttpAddresses, port)
 	node.Start()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPut {
-			key := r.URL.Path[1:]
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			defer r.Body.Close()
-
-			leaderId := node.GetLeaderID()
-			switch node.GetState() {
-			case cluster.Leader:
-				putCmd := &cluster.Command{
-					Type:  cluster.CommandPut,
-					Key:   key,
-					Value: body,
-				}
-				log.Printf("Sending to clientCommandChan %v...", node.ClientCommandChan)
-				node.ClientCommandChan <- putCmd
-				w.WriteHeader(http.StatusCreated)
-				_, err := fmt.Fprintf(w, "Sent a PUT request for %s", key)
-				if err != nil {
-					log.Printf("Error writing response: %v", err)
-				}
-			default:
-				if leaderId == "" {
-					w.WriteHeader(http.StatusServiceUnavailable)
-					return
-				}
-				http.Redirect(w, r, fmt.Sprintf("http://%s/%s", peerHttpAddresses[leaderId], key), http.StatusTemporaryRedirect)
-				return
-			}
-
-		} else if r.Method == http.MethodGet {
-			key := r.URL.Path[1:]
-
-			node.RaftMu.Lock()
-			defer node.RaftMu.Unlock()
-			if _, ok := node.GetData()[key]; !ok {
-				w.WriteHeader(http.StatusNotFound)
-				_, err := fmt.Fprintf(w, "Key %s not found", key)
-				if err != nil {
-					return
-				}
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, err := w.Write(node.GetData()[key])
-			if err != nil {
-				fmt.Printf("Error writing response: %v", err)
-				return
-			}
-		}
-	})
-
-	go func() {
-		log.Printf("Listening on port %d", node.Port)
-		if http.ListenAndServe(fmt.Sprintf(":%d", node.Port), nil) != nil {
-			log.Fatalf("Error listening on port %d: %v", node.Port, err)
-		}
-		log.Printf("HTTP Server Goroutine Finished")
-	}()
+	serverAddr.Start()
 
 	sig := <-sigChan
 	log.Printf("Received signal: %v", sig)
