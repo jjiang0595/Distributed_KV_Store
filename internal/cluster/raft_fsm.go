@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"bytes"
-	"encoding/json"
 	"log"
 )
 
@@ -11,34 +10,65 @@ func (n *Node) ApplierGoroutine() {
 		log.Printf("Node %s: Applier goroutine stopped", n.ID)
 		n.applierWg.Done()
 	}()
-	n.RaftMu.Lock()
-	defer n.RaftMu.Unlock()
 
 	for {
+		n.raftMu.Lock()
 		for n.commitIndex <= n.lastApplied {
 			select {
 			case <-n.ctx.Done():
+				n.raftMu.Unlock()
 				return
 			default:
 			}
 			n.applierCond.Wait()
 		}
+		n.raftMu.Unlock()
 
-		for n.lastApplied < n.commitIndex {
-			log.Printf("Increasing n.lastApplied: %v", n.lastApplied)
-			n.lastApplied++
-			logEntry := n.log[n.lastApplied-1]
-			var cmd Command
-			if bytes.Equal(logEntry.Command, []byte("NO_OP_ENTRY")) {
-				continue
-			}
-			err := json.Unmarshal(logEntry.Command, &cmd)
-			if err != nil {
-				log.Fatalf("Error unmarshalling command: %v", err)
-			}
+		select {
+		case <-n.ctx.Done():
+			return
+		default:
+			n.raftMu.Lock()
+			startIndex := n.lastApplied + 1
+			endIndex := n.commitIndex
 
-			n.data[cmd.Key] = cmd.Value
-			log.Printf("Node %s: PUT %s -> %s", n.ID, cmd.Key, string(cmd.Value))
+			msgList := make([]ApplyMsg, 0, endIndex-startIndex+1)
+			//log.Printf("LOG: %v", n.log)
+			//log.Printf("Start Index: %v", startIndex)
+			//log.Printf("End Index: %v", endIndex)
+			var applyMsg ApplyMsg
+			for i := startIndex; i <= endIndex; i++ {
+				if i >= uint64(len(n.log)) {
+					log.Fatalf("Node %s: Commit Index greater than length of log", n.ID)
+				}
+
+				applyMsg = ApplyMsg{
+					Index: n.log[i].Index,
+					Term:  n.log[i].Term,
+					Valid: func() bool {
+						return !bytes.Equal(n.log[i].Command, []byte("NO_OP_ENTRY"))
+					}(),
+					Command: n.log[i].Command,
+				}
+				msgList = append(msgList, applyMsg)
+			}
+			n.lastApplied = endIndex
+			n.raftMu.Unlock()
+
+			for _, msg := range msgList {
+				if msg.Valid {
+					n.kvStore.ApplyCommand(msg.Command)
+				}
+				if errCh, ok := n.pendingCommands[msg.Index]; ok {
+					n.raftMu.Lock()
+					delete(n.pendingCommands, msg.Index)
+					n.raftMu.Unlock()
+					select {
+					case errCh <- nil:
+					default:
+					}
+				}
+			}
 		}
 	}
 }
