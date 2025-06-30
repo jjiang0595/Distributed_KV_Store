@@ -1,8 +1,8 @@
 package cluster
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"os"
@@ -39,8 +39,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestLeaderElection_FindLeader(t *testing.T) {
-	testNodes, clk := testSetup(t)
-
+	testNodes, _, _, clk := testSetup(t)
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
 
@@ -81,8 +80,7 @@ LeaderCheck:
 }
 
 func TestLeaderElection_LeaderStability(t *testing.T) {
-	testNodes, clk := testSetup(t)
-
+	testNodes, _, _, clk := testSetup(t)
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
 
@@ -124,8 +122,7 @@ CorrectLeaderCheck:
 }
 
 func TestLeaderElection_SplitVote(t *testing.T) {
-	testNodes, clk := testSetup(t)
-
+	testNodes, _, _, clk := testSetup(t)
 	for _, node := range testNodes {
 		select {
 		case node.electionTimeoutCh <- struct{}{}:
@@ -142,7 +139,7 @@ func TestLeaderElection_SplitVote(t *testing.T) {
 }
 
 func TestLeaderElection_LeaderCrashRecovery(t *testing.T) {
-	testNodes, clk := testSetup(t)
+	testNodes, _, _, clk := testSetup(t)
 	newCtx, newCancel := context.WithCancel(context.Background())
 	defer newCancel()
 
@@ -193,8 +190,7 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 		Value: []byte("testValue"),
 	}
 
-	testNodes, clk := testSetup(t)
-
+	testNodes, _, _, clk := testSetup(t)
 	exitTicker := clk.NewTicker(10 * time.Second)
 	checkTicker := clk.NewTicker(50 * time.Millisecond)
 	defer checkTicker.Stop()
@@ -244,7 +240,7 @@ ReplicationCheck:
 }
 
 func TestLogReplication_FollowerCrashAndRecovery(t *testing.T) {
-	testNodes, clk := testSetup(t)
+	testNodes, kvStores, transport, clk := testSetup(t)
 	newCtx, newCancel := context.WithCancel(context.Background())
 	defer newCancel()
 
@@ -368,9 +364,9 @@ FollowerRecoveryCheck:
 	cleanup(t, testNodes)
 }
 
-func TestNodePartition_LeaderPartition(t *testing.T) {
-	testNodes, clk := testSetup(t)
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
+func TestLogReplication_LogDivergence(t *testing.T) {
+	testNodes, _, transport, clk := testSetup(t)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
 
 	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
