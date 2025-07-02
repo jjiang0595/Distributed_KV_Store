@@ -95,3 +95,7 @@ func (n *Node) GetDirtyPersistenceState() bool {
 func (n *Node) GetKVStore() *KVStore {
 	return n.kvStore
 }
+
+func (n *Node) GetRPCServer() *RaftServer {
+	return n.raftServer
+}
