@@ -25,24 +25,17 @@ func testSetup(t *testing.T) (map[string]*Node, map[string]*KVStore, *MockNetwor
 
 	tempNodes := make(map[string]*Node)
 	for i := 0; i < 3; i++ {
+		nodeCtx, nodeCancel := context.WithCancel(context.Background())
 		nodeDataDir := filepath.Join(testDir, nodeIDs[i])
-		newNode := NewNode(nil, nil, nodeIDs[i], "localhost:", 0, 0, nodeDataDir, filterSelfID(nodeIDs[i], nodeIDs), clk, MockListenerFactory, mockTransport)
+		newNode := NewNode(nodeCtx, nodeCancel, nodeIDs[i], "localhost:", 0, 0, nodeDataDir, filterSelfID(nodeIDs[i], nodeIDs), clk, MockListenerFactory, mockTransport)
 		tempNodes[nodeIDs[i]] = newNode
 	}
 
 	testNodes := make(map[string]*Node)
 	for i := 0; i < 3; i++ {
-		nodeCtx, nodeCancel := context.WithCancel(context.Background())
-		applyChan := make(chan ApplyMsg, 50)
 		newNode := tempNodes[nodeIDs[i]]
-
 		mockTransport.RegisterRPCServer(newNode, newNode.raftServer)
-
 		testNodes[nodeIDs[i]] = newNode
-		testNodes[nodeIDs[i]].ctx = nodeCtx
-		testNodes[nodeIDs[i]].cancel = nodeCancel
-		testNodes[nodeIDs[i]].applyChan = applyChan
-
 		kvStore := NewKVStore()
 		kvStores[nodeIDs[i]] = kvStore
 	}
