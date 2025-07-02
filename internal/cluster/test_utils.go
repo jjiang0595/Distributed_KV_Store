@@ -118,3 +118,64 @@ LeaderCheck:
 	}
 	return leaderID
 }
+
+func crashAndRecoverNode(followerID string, testNodes map[string]*Node, kvStores map[string]*KVStore, transport *MockNetworkTransport, clk *clockwork.FakeClock) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	deletedNode := testNodes[followerID]
+	testNodes[followerID].cancel()
+	go testNodes[followerID].Shutdown()
+	transport.UnregisterRPCServer(deletedNode)
+	deletedNode.WaitAllGoroutines()
+	delete(kvStores, followerID)
+	testNodes[followerID] = NewNode(
+		ctx,
+		cancel,
+		deletedNode.ID,
+		deletedNode.Address,
+		deletedNode.Port,
+		deletedNode.GrpcPort,
+		deletedNode.dataDir,
+		deletedNode.peers,
+		clk,
+		deletedNode.listenerFactory,
+		transport,
+	)
+	transport.RegisterRPCServer(testNodes[followerID], testNodes[followerID].raftServer)
+	kvStores[followerID] = testNodes[followerID].kvStore
+	testNodes[followerID].Start()
+}
+
+func crashNode(followerID string, testNodes map[string]*Node, kvStores map[string]*KVStore, transport *MockNetworkTransport) *Node {
+	deletedNode := testNodes[followerID]
+	testNodes[followerID].cancel()
+	go testNodes[followerID].Shutdown()
+	transport.UnregisterRPCServer(deletedNode)
+	deletedNode.WaitAllGoroutines()
+	delete(kvStores, followerID)
+
+	return deletedNode
+}
+
+func recoverNode(deletedNode *Node, followerID string, testNodes map[string]*Node, kvStores map[string]*KVStore, transport *MockNetworkTransport, clk *clockwork.FakeClock) *Node {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	testNodes[followerID] = NewNode(
+		ctx,
+		cancel,
+		deletedNode.ID,
+		deletedNode.Address,
+		deletedNode.Port,
+		deletedNode.GrpcPort,
+		deletedNode.dataDir,
+		deletedNode.peers,
+		clk,
+		deletedNode.listenerFactory,
+		transport,
+	)
+	transport.RegisterRPCServer(testNodes[followerID], testNodes[followerID].raftServer)
+	kvStores[followerID] = testNodes[followerID].kvStore
+	testNodes[followerID].Start()
+
+	return testNodes[followerID]
+}
