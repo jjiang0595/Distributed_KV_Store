@@ -1,15 +1,5 @@
 package cluster
 
-func (n *Node) GetData() map[string]string {
-	n.rwMu.RLock()
-	defer n.rwMu.Unlock()
-	dataCopy := make(map[string]string, len(n.data))
-	for k, v := range n.data {
-		dataCopy[k] = v
-	}
-	return dataCopy
-}
-
 func (n *Node) GetPeers() []string {
 	n.raftMu.Lock()
 	defer n.raftMu.Unlock()
