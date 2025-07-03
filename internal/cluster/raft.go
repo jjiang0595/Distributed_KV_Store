@@ -136,7 +136,7 @@ func NewNode(ctx context.Context, cancel context.CancelFunc, ID string, Address 
 		matchIndex:                make(map[string]uint64),
 		electionTimeout:           nil,
 		grpcServer:                nil,
-		applyChan:                 make(chan ApplyMsg),
+		applyChan:                 make(chan ApplyMsg, 50),
 		appendEntriesChan:         make(chan *AppendEntriesRequestWrapper, 1),
 		appendEntriesResponseChan: make(chan *AppendEntriesResponseWrapper),
 		clientCommandChan:         make(chan *ProposeRequest),
@@ -491,7 +491,6 @@ func (n *Node) RunRaftLoop() {
 
 				n.raftMu.Lock()
 				votesReceivedLen, totalNodes := len(n.votesReceived), len(n.peers)+1
-
 				if uint64(votesReceivedLen) >= uint64(totalNodes/2)+1 {
 					n.state = Leader
 					n.electionTimeout.Stop()
