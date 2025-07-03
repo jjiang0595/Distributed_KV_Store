@@ -625,3 +625,125 @@ ReintroduceOldLeader:
 	t.Logf("Success: Old leader step down")
 	cleanup(t, testNodes)
 }
+
+func TestNodesCrash_CrashAndRecovery(t *testing.T) {
+	t.Parallel()
+	testNodes, kvStore, transport, clk := testSetup(t)
+
+	exitTicker := clk.NewTicker(500 * time.Millisecond)
+	checkTicker := clk.NewTicker(25 * time.Millisecond)
+
+	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+
+	testCmdA := &Command{
+		Type:  CommandPut,
+		Key:   "key_A",
+		Value: "value_A",
+	}
+
+	cmdToBytes, err := json.Marshal(testCmdA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCmdB := &Command{
+		Type:  CommandPut,
+		Key:   "key_B",
+		Value: "value_B",
+	}
+
+	cmdToBytes, err = json.Marshal(testCmdB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exitTicker.Reset(2 * time.Second)
+	checkTicker.Reset(50 * time.Millisecond)
+
+	var persisted bool
+DataPersistedCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			persisted = true
+			for nodeID, _ := range testNodes {
+				if nodeID == leaderID {
+					continue
+				}
+				log.Printf("follower: %v, leader: %v", len(kvStore[nodeID].GetData()), len(kvStore[leaderID].GetData()))
+				if len(kvStore[nodeID].GetData()) == 2 {
+					persisted = false
+					break
+				}
+			}
+			if persisted {
+				log.Printf("PERSISTED")
+				break DataPersistedCheck
+			}
+		case <-exitTicker.Chan():
+			log.Fatalf("Error: Timed out waiting for persisted data")
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	clk.Advance(50 * time.Millisecond)
+	runtime.Gosched()
+
+	crashedTestNodes := make(map[string]*Node)
+	for nodeID := range testNodes {
+		deletedNode := crashNode(nodeID, testNodes, kvStore, transport)
+		crashedTestNodes[nodeID] = deletedNode
+		log.Printf("AAAA %v", crashedTestNodes[nodeID].kvStore.GetData())
+	}
+
+	for nodeID := range testNodes {
+		recoverNode(crashedTestNodes[nodeID], nodeID, testNodes, kvStore, transport, clk)
+	}
+
+	checkTicker.Reset(100 * time.Millisecond)
+	exitTicker.Reset(2 * time.Second)
+	findLeader(t, clk, crashedTestNodes, checkTicker, exitTicker)
+
+	var recovered bool
+RecoveredCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			recovered = false
+			for nodeID, _ := range crashedTestNodes {
+				for key, oldVal := range crashedTestNodes[nodeID].kvStore.GetData() {
+					if newVal, ok := testNodes[nodeID].kvStore.Get(key); ok && oldVal == newVal {
+						recovered = true
+					}
+				}
+			}
+			if recovered {
+				break RecoveredCheck
+			}
+
+		case <-exitTicker.Chan():
+			break RecoveredCheck
+
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+
+	if !recovered {
+		t.Fatalf("Error: New nodes' data not consistent with old nodes' data")
+	}
+	cleanup(t, testNodes)
+}
