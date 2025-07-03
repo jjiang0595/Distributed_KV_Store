@@ -129,7 +129,7 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 	if len(c.addresses) == 0 {
 		return "", fmt.Errorf("no addresses")
 	}
-	
+
 	var serverAddress string
 	if c.leaderAddress.Load() == "" {
 		for _, addr := range c.addresses {

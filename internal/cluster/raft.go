@@ -33,9 +33,6 @@ type Node struct {
 	GrpcPort int    `yaml:"grpc_port"`
 	dataDir  string `yaml:"data_dir"`
 
-	// KV Store data
-	data map[string]string
-
 	// Raft
 	raftMu sync.Mutex
 	rwMu   sync.RWMutex
