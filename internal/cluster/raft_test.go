@@ -39,6 +39,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestLeaderElection_FindLeader(t *testing.T) {
+	t.Parallel()
+
 	testNodes, _, _, clk := testSetup(t)
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
@@ -80,6 +82,8 @@ LeaderCheck:
 }
 
 func TestLeaderElection_LeaderStability(t *testing.T) {
+	t.Parallel()
+
 	testNodes, _, _, clk := testSetup(t)
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
@@ -122,6 +126,8 @@ CorrectLeaderCheck:
 }
 
 func TestLeaderElection_SplitVote(t *testing.T) {
+	t.Parallel()
+
 	testNodes, _, _, clk := testSetup(t)
 	for _, node := range testNodes {
 		select {
@@ -139,6 +145,8 @@ func TestLeaderElection_SplitVote(t *testing.T) {
 }
 
 func TestLeaderElection_LeaderCrashRecovery(t *testing.T) {
+	t.Parallel()
+
 	testNodes, _, _, clk := testSetup(t)
 	newCtx, newCancel := context.WithCancel(context.Background())
 	defer newCancel()
@@ -184,6 +192,8 @@ CrashLeader:
 }
 
 func TestLogReplication_LeaderCommand(t *testing.T) {
+	t.Parallel()
+
 	testCmd := &Command{
 		Type:  CommandPut,
 		Key:   "testKey",
@@ -248,9 +258,9 @@ ReplicationCheck:
 }
 
 func TestLogReplication_FollowerCrashAndRecovery(t *testing.T) {
+	t.Parallel()
+
 	testNodes, kvStores, transport, clk := testSetup(t)
-	newCtx, newCancel := context.WithCancel(context.Background())
-	defer newCancel()
 
 	leaderID := ""
 	followerID := ""
@@ -313,28 +323,9 @@ LeaderCheck:
 			runtime.Gosched()
 		}
 	}
+
 	deletedNode := testNodes[followerID]
-	testNodes[followerID].cancel()
-	go testNodes[followerID].Shutdown()
-	transport.UnregisterRPCServer(deletedNode)
-	deletedNode.WaitAllGoroutines()
-	delete(kvStores, followerID)
-	testNodes[followerID] = NewNode(
-		newCtx,
-		newCancel,
-		deletedNode.ID,
-		deletedNode.Address,
-		deletedNode.Port,
-		deletedNode.GrpcPort,
-		deletedNode.dataDir,
-		deletedNode.peers,
-		clk,
-		deletedNode.listenerFactory,
-		transport,
-	)
-	transport.RegisterRPCServer(testNodes[followerID], testNodes[followerID].raftServer)
-	kvStores[followerID] = testNodes[followerID].kvStore
-	testNodes[followerID].Start()
+	crashAndRecoverNode(followerID, testNodes, kvStores, transport, clk)
 
 	exitTicker.Reset(5 * time.Second)
 	checkTicker.Reset(50 * time.Millisecond)
@@ -388,6 +379,7 @@ FollowerRecoveryCheck:
 }
 
 func TestLogReplication_LogDivergence(t *testing.T) {
+	t.Parallel()
 	testNodes, _, transport, clk := testSetup(t)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
@@ -567,6 +559,7 @@ ConflictingLogsCheck:
 }
 
 func TestNodePartition_LeaderPartition(t *testing.T) {
+	t.Parallel()
 	testNodes, _, transport, clk := testSetup(t)
 	exitTicker := clk.NewTicker(500 * time.Millisecond)
 	checkTicker := clk.NewTicker(25 * time.Millisecond)
