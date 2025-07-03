@@ -3,147 +3,18 @@ package main
 import (
 	"context"
 	"distributed_kv_store/internal/cluster"
-	"encoding/json"
-	"errors"
+	"distributed_kv_store/internal/serverapp"
 	"flag"
 	"fmt"
 	"github.com/jonboulle/clockwork"
 	"gopkg.in/yaml.v3"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
-	"time"
 )
-
-type HTTPServer struct {
-	nodeID            string
-	kvStore           *cluster.KVStore
-	proposeCommand    func(cmd []byte) error
-	server            *http.Server
-	port              int
-	peerHTTPAddresses map[string]string
-}
-
-func NewHTTPServer(nodeID string, kvStore *cluster.KVStore, proposeCmd func(cmd []byte) error, peerHTTPAddresses map[string]string, port int) *HTTPServer {
-	return &HTTPServer{
-		nodeID:            nodeID,
-		kvStore:           kvStore,
-		proposeCommand:    proposeCmd,
-		port:              port,
-		peerHTTPAddresses: peerHTTPAddresses,
-	}
-}
-
-func (s *HTTPServer) Start() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/key/", s.handleKeyRequest)
-	s.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", s.port),
-		Handler: mux,
-	}
-
-	go func() {
-		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("%s HTTP Server Failed: %v", s.nodeID, err)
-		}
-	}()
-}
-
-func (s *HTTPServer) Stop() {
-	if s.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := s.server.Shutdown(ctx); err != nil {
-			log.Printf("%s HTTP Server Shutdown Failed: %v", s.nodeID, err)
-		}
-	}
-}
-
-func (s *HTTPServer) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
-	key := r.URL.Path[len("/key/"):]
-
-	if key == "" {
-		http.Error(w, "key not found", http.StatusNotFound)
-		return
-	}
-
-	switch r.Method {
-	case "PUT":
-		s.handlePutRequest(w, r, key)
-	default:
-		s.handleGetRequest(w, r, key)
-	}
-}
-
-func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, key string) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	var value cluster.PutRequest
-	if err := json.Unmarshal(body, &value); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	putCmd := &cluster.Command{
-		Type:  cluster.CommandPut,
-		Key:   key,
-		Value: value.Value,
-	}
-	var cmdToBytes []byte
-	cmdToBytes, err = json.Marshal(putCmd)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	err = s.proposeCommand(cmdToBytes)
-	if err != nil {
-		if strings.Contains(err.Error(), "not leader, current leader is ") {
-			leaderID := strings.TrimPrefix(err.Error(), "not leader, current leader is ")
-			http.Redirect(w, r, fmt.Sprintf("http://%s/%s", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
-		} else if strings.Contains(err.Error(), "timed out") {
-			http.Error(w, fmt.Sprintf("Client request timed out: %v", err), http.StatusRequestTimeout)
-		} else {
-			http.Error(w, fmt.Sprintf("Internal server error: %v", err), http.StatusInternalServerError)
-		}
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	_, err = w.Write([]byte(fmt.Sprintf("Successfully put %s %s", key, string(body))))
-	if err != nil {
-		log.Printf("error logging PUT success message")
-	}
-}
-
-func (s *HTTPServer) handleGetRequest(w http.ResponseWriter, r *http.Request, key string) {
-	value, found := s.kvStore.Get(key)
-	if !found {
-		http.Error(w, "value not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "application/yaml")
-	w.WriteHeader(http.StatusOK)
-	yamlBytes, err := yaml.Marshal(value)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-	_, err = w.Write(yamlBytes)
-	if err != nil {
-		_ = fmt.Errorf("error writing response: %v", err)
-		return
-	}
-	_, err = fmt.Fprintf(w, "Sent a PUT request for %s", key)
-	if err != nil {
-		log.Printf("Error writing response: %v", err)
-	}
-}
 
 type Config struct {
 	Node struct {
@@ -218,7 +89,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	node := cluster.NewNode(ctx, cancel, cfg.Node.ID, cfg.Node.Address, port, gRpcPort, cfg.Node.DataDir, peerIDs, clk, cluster.ProdListenerFactory, t)
-	serverAddr := NewHTTPServer(node.ID, node.GetKVStore(), node.ProposeCommand, peerHttpAddresses, port)
+	serverAddr := serverapp.NewHTTPServer(node.ID, node.GetKVStore(), node.ProposeCommand, peerHttpAddresses, port)
 	node.Start()
 
 	sigChan := make(chan os.Signal, 1)
