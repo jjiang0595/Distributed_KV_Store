@@ -125,3 +125,44 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 	return nil
 }
 
+func (c *Client) GET(ctx context.Context, key string) (string, error) {
+	if len(c.addresses) == 0 {
+		return "", fmt.Errorf("no addresses")
+	}
+	
+	var serverAddress string
+	if c.leaderAddress.Load() == "" {
+		for _, addr := range c.addresses {
+			c.leaderAddress.Store(addr)
+			break
+		}
+	} else {
+		serverAddress = c.leaderAddress.Load().(string)
+	}
+
+	url := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
+	httpRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var bodyString string
+	if err := json.Unmarshal(body, &bodyString); err != nil {
+		return "", fmt.Errorf("fail to unmarshal JSON response: %w", err)
+	}
+
+	log.Printf("%v", len(string(body)))
+	return bodyString, nil
+}
