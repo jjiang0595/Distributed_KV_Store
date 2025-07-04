@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"distributed_kv_store/internal/cluster"
+	"distributed_kv_store/internal/serverapp"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"time"
 )
@@ -61,6 +63,11 @@ func NewClient(addresses map[string]string, options ...Option) *Client {
 		return http.ErrUseLastResponse
 	}
 	c.leaderAddress.Store("")
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	nodeAddr, err := c.findLeader(ctx)
+	if err == nil {
+		c.leaderAddress.Store(nodeAddr)
 	}
 
 	log.Printf("Raft client created with %d addresses", len(addresses))
