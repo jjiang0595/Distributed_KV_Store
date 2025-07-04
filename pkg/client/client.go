@@ -166,3 +166,53 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 	log.Printf("%v", len(string(body)))
 	return bodyString, nil
 }
+
+func (c *Client) findLeader(ctx context.Context) (string, error) {
+	var serverAddress string
+	if c.leaderAddress.Load() != "" {
+		serverAddress = c.leaderAddress.Load().(string)
+		return serverAddress, nil
+	}
+
+	for _, addr := range c.addresses {
+		leaderAddr, err := func() (string, error) {
+			findCtx, findCancel := context.WithTimeout(ctx, time.Second*2)
+			defer findCancel()
+			reqURL := fmt.Sprintf("http://%s/status", addr)
+			httpRequest, _ := http.NewRequestWithContext(findCtx, http.MethodGet, reqURL, nil)
+			resp, err := c.httpClient.Do(httpRequest)
+			if err != nil {
+				return "", fmt.Errorf("fail to get leader info")
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return "", fmt.Errorf("bad status: %s", resp.Status)
+			}
+
+			if resp.StatusCode == 200 {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return "", fmt.Errorf("fail to read leader info: %v", err)
+				}
+
+				var leaderInfo serverapp.LeaderInfo
+				err = json.Unmarshal(body, &leaderInfo)
+				if err != nil {
+					return "", fmt.Errorf("fail to unmarshal leader info: %v", err)
+				}
+				log.Printf("Leader info: %v", leaderInfo)
+				if leaderInfo.IsLead {
+					if leaderAddr, ok := c.addresses[leaderInfo.LeaderID]; ok {
+						return leaderAddr, nil
+					}
+				}
+			}
+			return "", fmt.Errorf("fail to get leader info")
+		}()
+		if err == nil {
+			return leaderAddr, nil
+		}
+	}
+	return "", fmt.Errorf("leader not found")
+}
