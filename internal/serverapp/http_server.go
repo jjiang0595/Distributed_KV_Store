@@ -85,13 +85,12 @@ func (s *HTTPServer) handleStatusRequest(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	if _, err = w.Write(infoToBytes); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(infoToBytes)
 }
 
 func (s *HTTPServer) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
