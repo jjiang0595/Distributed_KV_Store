@@ -61,11 +61,6 @@ func NewClient(addresses map[string]string, options ...Option) *Client {
 		return http.ErrUseLastResponse
 	}
 	c.leaderAddress.Store("")
-	if len(addresses) > 0 {
-		for _, addr := range addresses {
-			c.leaderAddress.Store(addr)
-			break
-		}
 	}
 
 	log.Printf("Raft client created with %d addresses", len(addresses))
