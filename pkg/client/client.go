@@ -57,6 +57,9 @@ func NewClient(addresses map[string]string, options ...Option) *Client {
 		op(c)
 	}
 
+	c.httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	c.leaderAddress.Store("")
 	if len(addresses) > 0 {
 		for _, addr := range addresses {
