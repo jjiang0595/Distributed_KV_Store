@@ -98,7 +98,6 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 
 	var reqBody io.Reader
 	reqBody = bytes.NewBuffer(cmdToBytes)
-	url := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, reqBody)
 	if err != nil {
 		return fmt.Errorf("fail to create new HTTP request: %w", err)
@@ -118,6 +117,7 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusTemporaryRedirect {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
+		reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	fmt.Printf("Received body response: %v\n", bodyBytes)
@@ -140,8 +140,8 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 		serverAddress = c.leaderAddress.Load().(string)
 	}
 
-	url := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
-	httpRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
+	httpRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 
 	resp, err := c.httpClient.Do(httpRequest)
 	if err != nil {
