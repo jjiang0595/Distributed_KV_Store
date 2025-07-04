@@ -299,6 +299,16 @@ func (n *Node) ProposeCommand(cmdBytes []byte) error {
 	}
 }
 
+func (n *Node) GetLeaderInfo() (string, string, bool) {
+	if n.GetState() != Leader {
+		if n.GetLeaderID() != "" {
+			return n.GetLeaderID(), n.ID, true
+		}
+		return "", n.ID, false
+	}
+	return n.ID, n.ID, true
+}
+
 func (n *Node) RunRaftLoop() {
 	log.Printf("Node %s: Starting Raft", n.ID)
 	defer func() {
