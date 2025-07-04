@@ -18,7 +18,7 @@ func TestClient_PUT(t *testing.T) {
 	for i := 0; i < len(testNodes); i++ {
 		nodeID := fmt.Sprintf("node%d", i+1)
 		node := testNodes[nodeID]
-		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, peerHTTPAddresses, node.Port)
+		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, node.GetLeaderInfo, peerHTTPAddresses, node.Port)
 		mockHTTPRT.RegisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), httpServers[nodeID].GetServer().Handler)
 		httpServers[nodeID].Start()
 	}
@@ -77,7 +77,7 @@ func TestClient_GET(t *testing.T) {
 	for i := 0; i < len(testNodes); i++ {
 		nodeID := fmt.Sprintf("node%d", i+1)
 		node := testNodes[nodeID]
-		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, peerHTTPAddresses, node.Port)
+		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, node.GetLeaderInfo, peerHTTPAddresses, node.Port)
 		mockHTTPRT.RegisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), httpServers[nodeID].GetServer().Handler)
 		httpServers[nodeID].Start()
 	}

@@ -18,10 +18,17 @@ type HTTPServer struct {
 	nodeID            string
 	kvStore           *cluster.KVStore
 	proposeCommand    func(cmd []byte) error
+	getLeaderInfo     func() (string, string, bool)
 	server            *http.Server
 	port              int
 	peerHTTPAddresses map[string]string
 	mu                sync.RWMutex
+}
+
+type LeaderInfo struct {
+	NodeID   string `json:"node_id"`
+	LeaderID string `json:"leader_id"`
+	IsLead   bool   `json:"is_leader"`
 }
 
 func (s *HTTPServer) GetServer() *http.Server {
@@ -30,17 +37,19 @@ func (s *HTTPServer) GetServer() *http.Server {
 	return s.server
 }
 
-func NewHTTPServer(nodeID string, kvStore *cluster.KVStore, proposeCmd func(cmd []byte) error, peerHTTPAddresses map[string]string, port int) *HTTPServer {
+func NewHTTPServer(nodeID string, kvStore *cluster.KVStore, proposeCmd func(cmd []byte) error, getLeaderInfo func() (string, string, bool), peerHTTPAddresses map[string]string, port int) *HTTPServer {
 	mux := http.NewServeMux()
 	s := &HTTPServer{
 		nodeID:            nodeID,
 		kvStore:           kvStore,
 		proposeCommand:    proposeCmd,
+		getLeaderInfo:     getLeaderInfo,
 		server:            &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux},
 		peerHTTPAddresses: peerHTTPAddresses,
 		port:              port,
 	}
 	mux.HandleFunc("/key/", s.handleKeyRequest)
+	mux.HandleFunc("/status", s.handleStatusRequest)
 	return s
 }
 
@@ -60,6 +69,29 @@ func (s *HTTPServer) Stop() {
 			log.Printf("%s HTTP Server Shutdown Failed: %v", s.nodeID, err)
 		}
 	}
+}
+
+func (s *HTTPServer) handleStatusRequest(w http.ResponseWriter, r *http.Request) {
+	nodeId, leaderID, isLead := s.getLeaderInfo()
+	leaderInfo := &LeaderInfo{
+		NodeID:   nodeId,
+		LeaderID: leaderID,
+		IsLead:   isLead,
+	}
+
+	var infoToBytes []byte
+	infoToBytes, err := json.Marshal(leaderInfo)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err = w.Write(infoToBytes); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(infoToBytes)
 }
 
 func (s *HTTPServer) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
