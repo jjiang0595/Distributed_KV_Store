@@ -158,9 +158,7 @@ func (s *HTTPServer) handleGetRequest(w http.ResponseWriter, r *http.Request, ke
 		http.Error(w, "value not found", http.StatusNotFound)
 		return
 	}
-	
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+
 	jsonBytes, err := json.Marshal(value)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -170,5 +168,7 @@ func (s *HTTPServer) handleGetRequest(w http.ResponseWriter, r *http.Request, ke
 		_ = fmt.Errorf("error writing response: %v", err)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	log.Printf("Sent a GET request for key %s", key)
 }
