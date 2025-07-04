@@ -73,59 +73,117 @@ func NewClient(addresses map[string]string, options ...Option) *Client {
 }
 
 func (c *Client) PUT(ctx context.Context, key string, value string) error {
-	log.Printf("Putting key=%s value=%s", key, value)
 	if len(c.addresses) == 0 {
 		return fmt.Errorf("no addresses")
 	}
 
-	var serverAddress string
-	if c.leaderAddress.Load() == "" {
-		for _, addr := range c.addresses {
-			c.leaderAddress.Store(addr)
-			break
+	retryTime := 100 * time.Millisecond
+	retryCount := 0
+
+	for retryCount < c.maxRetries {
+		log.Printf("Putting key=%s value=%s", key, value)
+		var serverAddress string
+		serverAddress = func() string {
+			if c.leaderAddress.Load() == "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				defer cancel()
+				probedAddr, err := c.findLeader(ctx)
+				if err == nil {
+					c.leaderAddress.Store(serverAddress)
+					return probedAddr
+				} else {
+					for _, addr := range c.addresses {
+						c.leaderAddress.Store(addr)
+						return addr
+					}
+				}
+			}
+			return c.leaderAddress.Load().(string)
+		}()
+
+		if serverAddress == "" {
+			return fmt.Errorf("server address not found")
 		}
-	} else {
-		serverAddress = c.leaderAddress.Load().(string)
-	}
-	cmd := &cluster.Command{
-		Type:  cluster.CommandPut,
-		Key:   key,
-		Value: value,
-	}
 
-	var cmdToBytes []byte
-	cmdToBytes, err := json.Marshal(cmd)
-	if err != nil {
-		return err
-	}
+		cmd := &cluster.Command{
+			Type:  cluster.CommandPut,
+			Key:   key,
+			Value: value,
+		}
 
-	var reqBody io.Reader
-	reqBody = bytes.NewBuffer(cmdToBytes)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, reqBody)
-	if err != nil {
-		return fmt.Errorf("fail to create new HTTP request: %w", err)
-	}
-	log.Printf("HTTP request to %s", url)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+		var cmdToBytes []byte
+		cmdToBytes, err := json.Marshal(cmd)
+		if err != nil {
+			return err
+		}
 
-	if resp.StatusCode == 404 {
-		log.Printf("Status Code 404: Not Found")
-		return fmt.Errorf("404: Not found")
-	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusTemporaryRedirect {
-		return fmt.Errorf("bad status: %s", resp.Status)
-	}
+		var reqBody io.Reader
+		reqBody = bytes.NewBuffer(cmdToBytes)
 		reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, reqBody)
+		if err != nil {
+			return fmt.Errorf("fail to create new HTTP request: %w", err)
+		}
+		log.Printf("HTTP request to %s", reqURL)
+		req.Header.Set("Content-Type", "application/json")
 
-	bodyBytes, err := io.ReadAll(resp.Body)
-	fmt.Printf("Received body response: %v\n", bodyBytes)
-	fmt.Printf("PUT %s -> %s", key, serverAddress)
-	return nil
+		err = func() error {
+			resp, err := c.httpClient.Do(req)
+			if err != nil {
+				c.leaderAddress.Store("")
+				leaderID, err := c.findLeader(ctx)
+				if err == nil {
+					c.leaderAddress.Store(leaderID)
+				}
+				return err
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode == 404 {
+				log.Printf("Status Code 404: Not Found")
+				return fmt.Errorf("404: Not found")
+			}
+			if resp.StatusCode == http.StatusRequestTimeout {
+				log.Printf("Status Code 401: Request Timeout")
+				return fmt.Errorf("401: Request Timeout")
+			}
+			if resp.StatusCode == http.StatusInternalServerError {
+				log.Printf("500: Internal Server Error")
+				return fmt.Errorf("500: Internal Server Error")
+			}
+			if resp.StatusCode == http.StatusOK {
+				bodyBytes, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Received body response: %v\n", bodyBytes)
+				fmt.Printf("PUT %s -> %s", key, serverAddress)
+				return nil
+			}
+			if resp.StatusCode == http.StatusTemporaryRedirect {
+				leaderURL := resp.Header.Get("Location")
+				if leaderURL == "" {
+					return fmt.Errorf("no leader")
+				}
+				parsedURL, err := url.Parse(leaderURL)
+				if err != nil {
+					return err
+				}
+				serverAddress = parsedURL.Host
+				return nil
+			}
+			return nil
+		}()
+
+		if err == nil {
+			c.leaderAddress.Store(serverAddress)
+			return nil
+		}
+		retryCount++
+		time.Sleep(retryTime)
+		retryTime *= 2
+	}
+	return fmt.Errorf("fail to put key=%s, value=%s", key, value)
 }
 
 func (c *Client) GET(ctx context.Context, key string) (string, error) {
