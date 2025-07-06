@@ -18,6 +18,14 @@ import (
 
 type Option func(*Client)
 
+var httpErrorMessages = map[int]string{
+	404: "Resource Not Found",
+	408: "Request Timeout",
+	500: "Internal Server Error",
+	503: "Service Unavailable",
+	504: "Status Gateway Timeout",
+}
+
 type Client struct {
 	httpClient    *http.Client
 	addresses     map[string]string
