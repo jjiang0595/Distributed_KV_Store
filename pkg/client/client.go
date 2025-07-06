@@ -23,6 +23,7 @@ type Client struct {
 	addresses     map[string]string
 	leaderAddress atomic.Value
 	maxRetries    int
+	clk           clockwork.Clock
 }
 
 func WithHTTPTransport(rt http.RoundTripper) Option {
@@ -49,11 +50,18 @@ func WithMaxRetries(maxRetries int) Option {
 	}
 }
 
+func WithClock(clock clockwork.Clock) Option {
+	return func(c *Client) {
+		c.clk = clock
+	}
+}
+
 func NewClient(addresses map[string]string, options ...Option) *Client {
 	c := &Client{
 		httpClient: http.DefaultClient,
 		addresses:  addresses,
 		maxRetries: 3,
+		clk:        clockwork.NewRealClock(),
 	}
 
 	for _, op := range options {
@@ -64,7 +72,7 @@ func NewClient(addresses map[string]string, options ...Option) *Client {
 		return http.ErrUseLastResponse
 	}
 	c.leaderAddress.Store("")
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := clockwork.WithTimeout(context.Background(), c.clk, 2*time.Second)
 	defer cancel()
 	nodeAddr, err := c.findLeader(ctx)
 	if err == nil {
