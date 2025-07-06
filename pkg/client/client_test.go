@@ -241,7 +241,38 @@ func TestClient_Put_MaxRetries(t *testing.T) {
 	}
 }
 
+func TestClient_Put_ContextTimeout(t *testing.T) {
+	test := testSetup(t)
+	test.Client = NewClient(test.PeerHTTPAddrs, WithMaxRetries(1), WithTimeout(100*time.Millisecond), WithHTTPTransport(test.MockHTTPRT))
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	_, leaderID := setupLeader(t, test.Clock, test.TestNodes, checkTicker, exitTicker)
+	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
+
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+
+	waitForLeader(t, test.Clock, leaderID, test.TestNodes, checkTicker, exitTicker)
+
+	test.MockHTTPRT.SetDelay(200 * time.Millisecond)
+	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer cancel()
+	err := test.Client.PUT(ctx, "testKey", "testValue")
+
+	if err != nil {
+		log.Printf("Error putting key: %v", err.Error())
+		if strings.Contains(err.Error(), "context deadline exceeded") {
+			t.Logf("Success: Context timeout exceeded")
+			test.cleanup()
+			return
+		}
+		t.Fatal("Error: Wrong error code")
 	}
+	t.Fatal("Error: No response from server to context timeout exceeded")
+
+}
+
 
 	c := NewClient(peerHTTPAddresses, WithTimeout(5*time.Second), WithMaxRetries(3), WithHTTPTransport(mockHTTPRT))
 
