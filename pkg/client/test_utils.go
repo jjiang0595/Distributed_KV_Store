@@ -1,22 +1,37 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"distributed_kv_store/internal/cluster"
 	"distributed_kv_store/internal/serverapp"
 	"fmt"
 	"github.com/jonboulle/clockwork"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-func testSetup(t *testing.T) (map[string]string, map[string]*cluster.Node, map[string]*cluster.KVStore, *cluster.MockNetworkTransport, *clockwork.FakeClock) {
+type TestCluster struct {
+	T             *testing.T
+	Clock         *clockwork.FakeClock
+	Client        *Client
+	MockHTTPRT    *MockHTTPRoundTripper
+	HttpServers   map[string]*serverapp.HTTPServer
+	PeerHTTPAddrs map[string]string
+	TestNodes     map[string]*cluster.Node
+	KvStores      map[string]*cluster.KVStore
+	MockTransport *cluster.MockNetworkTransport
+}
+
+func testSetup(t *testing.T) *TestCluster {
 	clk := clockwork.NewFakeClock()
 	mockTransport := cluster.NewMockNetworkTransport(context.Background())
 	kvStores := make(map[string]*cluster.KVStore)
@@ -45,6 +60,18 @@ func testSetup(t *testing.T) (map[string]string, map[string]*cluster.Node, map[s
 		kvStores[nodeIDs[i]] = newNode.GetKVStore()
 	}
 
+	mockHTTPRT := NewMockHTTPRoundTripper(clk)
+	httpServers := make(map[string]*serverapp.HTTPServer, len(testNodes))
+	for i := 0; i < len(testNodes); i++ {
+		nodeID := fmt.Sprintf("node%d", i+1)
+		node := testNodes[nodeID]
+		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, node.GetLeaderInfo, peerHTTPAddresses, node.Port)
+		mockHTTPRT.RegisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), httpServers[nodeID].GetServer().Handler)
+		httpServers[nodeID].Start()
+	}
+
+	c := NewClient(peerHTTPAddresses, WithClock(clk), WithHTTPTransport(mockHTTPRT))
+
 	testNodesWg := sync.WaitGroup{}
 	for _, node := range testNodes {
 		testNodesWg.Add(1)
@@ -55,7 +82,17 @@ func testSetup(t *testing.T) (map[string]string, map[string]*cluster.Node, map[s
 	}
 
 	testNodesWg.Wait()
-	return peerHTTPAddresses, testNodes, kvStores, mockTransport, clk
+	return &TestCluster{
+		T:             t,
+		Client:        c,
+		PeerHTTPAddrs: peerHTTPAddresses,
+		MockHTTPRT:    mockHTTPRT,
+		HttpServers:   httpServers,
+		TestNodes:     testNodes,
+		KvStores:      kvStores,
+		MockTransport: mockTransport,
+		Clock:         clk,
+	}
 }
 
 type MockHTTPRoundTripper struct {
