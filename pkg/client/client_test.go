@@ -51,12 +51,21 @@ func TestMain(m *testing.M) {
 
 	c.leaderAddress.Store(peerHTTPAddresses[leaderID])
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func TestClient_Put_LeaderDiscovery(t *testing.T) {
+	test := testSetup(t)
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	setupLeader(t, test.Clock, test.TestNodes, checkTicker, exitTicker)
+
+	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 3*time.Second)
 	defer cancel()
 	testKey := "testKey"
 	testValue := "testValue"
-	err := c.PUT(ctx, testKey, testValue)
+	err := test.Client.PUT(ctx, testKey, testValue)
 	if err != nil {
-		t.Fatalf("Error putting key: %v", err)
+		t.Errorf("Error putting key: %v", err)
+		return
 	}
 
 	checkTicker.Reset(50 * time.Millisecond)
@@ -68,9 +77,8 @@ ReplicationCheck:
 		select {
 		case <-checkTicker.Chan():
 			replicated = true
-			for nodeID, _ := range testNodes {
-				t.Logf("%s: %v", nodeID, kvStores[nodeID].GetData())
-				if value, ok := kvStores[nodeID].Get(testKey); !ok || value != testValue {
+			for nodeID, _ := range test.TestNodes {
+				if value, ok := test.KvStores[nodeID].Get(testKey); !ok || value != testValue {
 					replicated = false
 					break
 				}
@@ -81,12 +89,12 @@ ReplicationCheck:
 		case <-exitTicker.Chan():
 			t.Fatalf("Logs not replicated within 10 secs")
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 	t.Logf("Success: Client PUT request replicated")
-	cleanup(t, testNodes, httpServers)
+	test.cleanup()
 }
 
 func TestClient_GET(t *testing.T) {
