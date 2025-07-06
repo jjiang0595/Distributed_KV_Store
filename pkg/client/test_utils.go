@@ -145,8 +145,46 @@ func (m *MockHTTPRoundTripper) SetTransientError(failCount int, httpStatus int, 
 }
 
 func (m *MockHTTPRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if m.simulatedDelay > 0 && (req.Method == "PUT" || req.Method == "GET") && strings.HasPrefix(req.URL.Path, "/key/") {
+		exitTicker := m.clk.NewTicker(m.simulatedDelay)
+		defer exitTicker.Stop()
+	DelayTest:
+		for {
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-exitTicker.Chan():
+				break DelayTest
+			}
+		}
+		m.simulatedDelay = 0
+	}
+
+	m.mu.Lock()
+
+	if m.currentFails < m.failCount && (req.Method == "PUT" || req.Method == "GET") && strings.HasPrefix(req.URL.Path, "/key/") {
+		m.currentFails++
+		if m.simulatedHTTPStatus != 0 {
+			resp := &http.Response{
+				StatusCode: m.simulatedHTTPStatus,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(bytes.NewBufferString(fmt.Sprintf("Simulated Network Error: %v", m.simulatedNetworkError))),
+				Request:    req,
+			}
+			log.Printf("Simulated HTTP status code %v", m.simulatedHTTPStatus)
+			m.mu.Unlock()
+			return resp, nil
+		}
+		if m.simulatedNetworkError != nil {
+			m.mu.Unlock()
+			return nil, m.simulatedNetworkError
+		}
+	}
+	m.mu.Unlock()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
 	handler, ok := m.handlers[req.URL.Host]
 	if !ok {
 		return nil, fmt.Errorf("no handler for %s", req.URL.Path)
