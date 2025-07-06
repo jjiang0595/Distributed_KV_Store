@@ -87,8 +87,8 @@ func (n *Node) GetMatchIndex() map[string]uint64 {
 }
 
 func (n *Node) GetDirtyPersistenceState() bool {
-	n.raftMu.Lock()
-	defer n.raftMu.Unlock()
+	n.rwMu.RLock()
+	defer n.rwMu.RUnlock()
 	return n.dirtyPersistenceState
 }
 

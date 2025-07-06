@@ -51,6 +51,8 @@ func (n *Node) LoadRaftState() error {
 }
 
 func (n *Node) SendPersistRaftStateRequest(oldTerm uint64, oldVotedFor string, oldLogLength int) {
+	n.rwMu.Lock()
+	defer n.rwMu.Unlock()
 	if !n.dirtyPersistenceState {
 		if oldTerm != n.currentTerm || oldVotedFor != n.votedFor || oldLogLength != len(n.log) {
 			n.dirtyPersistenceState = true
@@ -78,15 +80,15 @@ func (n *Node) PersistRaftState() {
 		Log:         logCopy,
 	}
 	n.raftMu.Unlock()
-	
+
 	err := n.WriteToDisk(savedState)
 	if err != nil {
 		log.Printf("PersistRaftState: Error writing saved state to disk: %v", err)
 	} else {
 		log.Printf("PersistRaftState: Saved state to disk")
-		n.raftMu.Lock()
+		n.rwMu.Lock()
 		n.dirtyPersistenceState = false
-		n.raftMu.Unlock()
+		n.rwMu.Unlock()
 	}
 }
 

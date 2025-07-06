@@ -343,8 +343,8 @@ func (n *Node) RunRaftLoop() {
 					n.resetElectionTimeout()
 					n.StopReplicators()
 					log.Printf("Leader %s: Stepping down", n.ID)
-					n.raftMu.Unlock()
 					n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
+					n.raftMu.Unlock()
 					continue
 				}
 
@@ -455,9 +455,8 @@ func (n *Node) RunRaftLoop() {
 				oldTerm, oldVotedFor := n.currentTerm, n.votedFor
 				oldLogLength := len(n.log)
 				n.resetElectionTimeout()
-				n.raftMu.Unlock()
-
 				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
+				n.raftMu.Unlock()
 
 				for _, peerID := range n.peers {
 					voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*50)
