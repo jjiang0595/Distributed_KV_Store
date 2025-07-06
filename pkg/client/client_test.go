@@ -108,6 +108,58 @@ func TestClient_GET(t *testing.T) {
 		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, node.GetLeaderInfo, peerHTTPAddresses, node.Port)
 		mockHTTPRT.RegisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), httpServers[nodeID].GetServer().Handler)
 		httpServers[nodeID].Start()
+func TestClient_Put_FollowerRedirects(t *testing.T) {
+	test := testSetup(t)
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	followerID, leaderID := setupLeader(t, test.Clock, test.TestNodes, checkTicker, exitTicker)
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+
+	waitForLeader(t, test.Clock, leaderID, test.TestNodes, checkTicker, exitTicker)
+
+	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[followerID])
+
+	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 3*time.Second)
+	defer cancel()
+	testKey := "testKey"
+	testValue := "testValue"
+	err := test.Client.PUT(ctx, testKey, testValue)
+	if err != nil {
+		t.Errorf("Error putting key: %v", err)
+		return
+	}
+
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	var replicated bool
+ReplicationCheck:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			replicated = true
+			for nodeID, _ := range test.TestNodes {
+				t.Logf("%s: %v", nodeID, test.KvStores[nodeID].GetData())
+				if value, ok := test.KvStores[nodeID].Get(testKey); !ok || value != testValue {
+					replicated = false
+					break
+				}
+			}
+			if replicated {
+				break ReplicationCheck
+			}
+		case <-exitTicker.Chan():
+			t.Fatalf("Logs not replicated within 10 secs")
+		default:
+			test.Clock.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
+	t.Logf("Success: Successfully redirected & client PUT request replicated")
+	test.cleanup()
+}
+
 	}
 
 	c := NewClient(peerHTTPAddresses, WithTimeout(5*time.Second), WithMaxRetries(3), WithHTTPTransport(mockHTTPRT))
