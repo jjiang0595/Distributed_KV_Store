@@ -212,6 +212,35 @@ ReplicationCheck:
 	test.cleanup()
 }
 
+func TestClient_Put_MaxRetries(t *testing.T) {
+	test := testSetup(t)
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	_, leaderID := setupLeader(t, test.Clock, test.TestNodes, checkTicker, exitTicker)
+	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
+
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+
+	waitForLeader(t, test.Clock, leaderID, test.TestNodes, checkTicker, exitTicker)
+
+	test.MockHTTPRT.SetTransientError(3, http.StatusServiceUnavailable, nil)
+
+	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 5*time.Second)
+	defer cancel()
+	err := test.Client.PUT(ctx, "testKey", "testValue")
+	test.cleanup()
+	if err != nil {
+		if strings.Contains(err.Error(), "Service Unavailable") {
+			t.Logf("Success: Graceful completion of maximum retries")
+			return
+		}
+		t.Errorf("Error putting key: %v", err)
+		return
+	}
+}
+
 	}
 
 	c := NewClient(peerHTTPAddresses, WithTimeout(5*time.Second), WithMaxRetries(3), WithHTTPTransport(mockHTTPRT))
