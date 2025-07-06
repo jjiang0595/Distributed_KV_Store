@@ -218,9 +218,10 @@ func (t *TestCluster) cleanup() {
 	}
 }
 
-func findLeader(t *testing.T, clk *clockwork.FakeClock, testNodes map[string]*cluster.Node, checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) string {
+func setupLeader(t *testing.T, clk *clockwork.FakeClock, testNodes map[string]*cluster.Node, checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) (string, string) {
 	leaderFound := false
 	leaderID := ""
+	followerID := ""
 
 LeaderCheck:
 	for {
@@ -230,6 +231,10 @@ LeaderCheck:
 				if node.GetState() == cluster.Leader {
 					leaderFound = true
 					leaderID = node.ID
+				} else {
+					followerID = node.ID
+				}
+				if followerID != leaderID && leaderID != "" {
 					break LeaderCheck
 				}
 			}
@@ -251,7 +256,9 @@ LeaderCheck:
 	if !leaderFound {
 		t.Fatalf("Error: Leader not found within time limit")
 	}
-	return leaderID
+	return followerID, leaderID
+}
+
 }
 
 func filterSelfID(nodeID string, nodes []string) []string {
