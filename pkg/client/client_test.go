@@ -25,13 +25,29 @@ func TestClient_PUT(t *testing.T) {
 		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, node.GetLeaderInfo, peerHTTPAddresses, node.Port)
 		mockHTTPRT.RegisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), httpServers[nodeID].GetServer().Handler)
 		httpServers[nodeID].Start()
+func TestMain(m *testing.M) {
+	logDir, err := os.MkdirTemp("./logs", "client_logs")
+	if err != nil {
+		log.Fatal(err)
 	}
+	defer func() {
+		if err := os.RemoveAll(logDir); err != nil {
+			log.Fatal(err)
+		}
+	}()
 
-	c := NewClient(peerHTTPAddresses, WithTimeout(5*time.Second), WithMaxRetries(3), WithHTTPTransport(mockHTTPRT))
+	logFilePath := filepath.Join(logDir, "test.log")
+	globalLogFile, err := os.Create(logFilePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer globalLogFile.Close()
+	log.SetOutput(io.MultiWriter(os.Stdout, globalLogFile))
+	log.SetFlags(log.Ltime | log.Lmicroseconds | log.Lshortfile)
 
-	checkTicker := clk.NewTicker(50 * time.Millisecond)
-	exitTicker := clk.NewTicker(1 * time.Second)
-	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+	exitCode := m.Run()
+	os.Exit(exitCode)
+}
 
 	c.leaderAddress.Store(peerHTTPAddresses[leaderID])
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
