@@ -14,17 +14,6 @@ import (
 	"time"
 )
 
-func TestClient_PUT(t *testing.T) {
-	peerHTTPAddresses, testNodes, kvStores, _, clk := testSetup(t)
-
-	mockHTTPRT := NewMockHTTPRoundTripper()
-	httpServers := make(map[string]*serverapp.HTTPServer, len(testNodes))
-	for i := 0; i < len(testNodes); i++ {
-		nodeID := fmt.Sprintf("node%d", i+1)
-		node := testNodes[nodeID]
-		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, node.GetLeaderInfo, peerHTTPAddresses, node.Port)
-		mockHTTPRT.RegisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), httpServers[nodeID].GetServer().Handler)
-		httpServers[nodeID].Start()
 func TestMain(m *testing.M) {
 	logDir, err := os.MkdirTemp("./logs", "client_logs")
 	if err != nil {
@@ -49,8 +38,6 @@ func TestMain(m *testing.M) {
 	os.Exit(exitCode)
 }
 
-	c.leaderAddress.Store(peerHTTPAddresses[leaderID])
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 func TestClient_Put_LeaderDiscovery(t *testing.T) {
 	test := testSetup(t)
 
@@ -97,17 +84,6 @@ ReplicationCheck:
 	test.cleanup()
 }
 
-func TestClient_GET(t *testing.T) {
-	peerHTTPAddresses, testNodes, kvStores, _, clk := testSetup(t)
-
-	mockHTTPRT := NewMockHTTPRoundTripper()
-	httpServers := make(map[string]*serverapp.HTTPServer, len(testNodes))
-	for i := 0; i < len(testNodes); i++ {
-		nodeID := fmt.Sprintf("node%d", i+1)
-		node := testNodes[nodeID]
-		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, node.GetLeaderInfo, peerHTTPAddresses, node.Port)
-		mockHTTPRT.RegisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), httpServers[nodeID].GetServer().Handler)
-		httpServers[nodeID].Start()
 func TestClient_Put_FollowerRedirects(t *testing.T) {
 	test := testSetup(t)
 
