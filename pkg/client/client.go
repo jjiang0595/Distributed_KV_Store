@@ -91,6 +91,24 @@ func NewClient(addresses map[string]string, options ...Option) *Client {
 	return c
 }
 
+func (c *Client) GetLeader(ctx context.Context) string {
+	if c.leaderAddress.Load() == "" {
+		ctx, cancel := clockwork.WithTimeout(ctx, c.clk, 1*time.Second)
+		defer cancel()
+		leaderAddr, err := c.findLeader(ctx)
+		if err == nil {
+			c.leaderAddress.Store(leaderAddr)
+			return leaderAddr
+		} else {
+			for _, addr := range c.addresses {
+				c.leaderAddress.Store(addr)
+				return addr
+			}
+		}
+	}
+	return c.leaderAddress.Load().(string)
+}
+
 func (c *Client) PUT(ctx context.Context, key string, value string) error {
 	if len(c.addresses) == 0 {
 		return fmt.Errorf("no addresses")
