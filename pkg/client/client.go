@@ -114,30 +114,12 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 		return fmt.Errorf("no addresses")
 	}
 
-	retryTime := 100 * time.Millisecond
-	retryCount := 0
+	retryTime := 50 * time.Millisecond
 
-	for retryCount < c.maxRetries {
-		log.Printf("Putting key=%s value=%s", key, value)
-		var serverAddress string
-		serverAddress = func() string {
-			if c.leaderAddress.Load() == "" {
-				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-				defer cancel()
-				probedAddr, err := c.findLeader(ctx)
-				if err == nil {
-					c.leaderAddress.Store(serverAddress)
-					return probedAddr
-				} else {
-					for _, addr := range c.addresses {
-						c.leaderAddress.Store(addr)
-						return addr
-					}
-				}
-			}
-			return c.leaderAddress.Load().(string)
-		}()
+	var serverAddress string
 
+	for i := 0; i < c.maxRetries; i++ {
+		serverAddress = c.GetLeader(ctx)
 		if serverAddress == "" {
 			return fmt.Errorf("server address not found")
 		}
@@ -154,71 +136,92 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 			return err
 		}
 
-		var reqBody io.Reader
-		reqBody = bytes.NewBuffer(cmdToBytes)
-		reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
-		req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, reqBody)
-		if err != nil {
-			return fmt.Errorf("fail to create new HTTP request: %w", err)
-		}
-		log.Printf("HTTP request to %s", reqURL)
-		req.Header.Set("Content-Type", "application/json")
-
-		err = func() error {
+		var statusCode int
+		statusCode, err = func() (int, error) {
+			var reqBody io.Reader
+			reqBody = bytes.NewBuffer(cmdToBytes)
+			reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, reqBody)
+			if err != nil {
+				return 0, fmt.Errorf("fail to create new HTTP request: %w", err)
+			}
+			log.Printf("HTTP request to %s", reqURL)
+			req.Header.Set("Content-Type", "application/json")
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
-				c.leaderAddress.Store("")
-				leaderID, err := c.findLeader(ctx)
-				if err == nil {
-					c.leaderAddress.Store(leaderID)
-				}
-				return err
+				return 0, fmt.Errorf("network/client error: %w", err)
 			}
 			defer resp.Body.Close()
-
-			if resp.StatusCode == 404 {
-				log.Printf("Status Code 404: Not Found")
-				return fmt.Errorf("404: Not found")
+			if statusCode == http.StatusRequestTimeout || statusCode == http.StatusServiceUnavailable || statusCode == http.StatusGatewayTimeout {
+				return resp.StatusCode, nil
 			}
-			if resp.StatusCode == http.StatusRequestTimeout {
-				log.Printf("Status Code 401: Request Timeout")
-				return fmt.Errorf("401: Request Timeout")
-			}
-			if resp.StatusCode == http.StatusInternalServerError {
-				log.Printf("500: Internal Server Error")
-				return fmt.Errorf("500: Internal Server Error")
+			if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusInternalServerError {
+				log.Printf("%d: %s", resp.StatusCode, httpErrorMessages[resp.StatusCode])
+				return resp.StatusCode, nil
 			}
 			if resp.StatusCode == http.StatusOK {
 				bodyBytes, err := io.ReadAll(resp.Body)
 				if err != nil {
-					return err
+					return 0, fmt.Errorf("error reading body: %s", err)
 				}
 				fmt.Printf("Received body response: %v\n", bodyBytes)
-				fmt.Printf("PUT %s -> %s", key, serverAddress)
-				return nil
+				return 200, nil
 			}
 			if resp.StatusCode == http.StatusTemporaryRedirect {
 				leaderURL := resp.Header.Get("Location")
 				if leaderURL == "" {
-					return fmt.Errorf("no leader")
+					return 0, fmt.Errorf("no leader")
 				}
 				parsedURL, err := url.Parse(leaderURL)
 				if err != nil {
-					return err
+					return 0, fmt.Errorf("fail to parse leader URL: %s", err)
 				}
-				serverAddress = parsedURL.Host
-				return nil
+				c.leaderAddress.Store(parsedURL.Host)
+				return 307, nil
 			}
-			return nil
+			return resp.StatusCode, nil
 		}()
 
 		if err == nil {
-			c.leaderAddress.Store(serverAddress)
-			return nil
+			if statusCode >= 200 && statusCode <= 299 {
+				fmt.Printf("PUT %s -> %s", key, serverAddress)
+				c.leaderAddress.Store(serverAddress)
+				return nil
+			}
+			if statusCode >= 300 && statusCode <= 399 {
+				fmt.Printf("Redirecting...")
+				continue
+			}
+			if statusCode == http.StatusNotFound || statusCode == http.StatusInternalServerError {
+				return fmt.Errorf("error: %s", httpErrorMessages[statusCode])
+			}
+			if statusCode == http.StatusRequestTimeout || statusCode == http.StatusServiceUnavailable || statusCode == http.StatusGatewayTimeout {
+				if i == c.maxRetries-1 {
+					return fmt.Errorf("%s", httpErrorMessages[statusCode])
+				}
+				c.leaderAddress.Store("")
+				leaderAddr, err := c.findLeader(ctx)
+				if err == nil {
+					c.leaderAddress.Store(leaderAddr)
+				}
+				continue
+			}
+			return fmt.Errorf("unexpected status code %v", statusCode)
+		} else {
+			c.leaderAddress.Store("")
+			leaderAddr, err := c.findLeader(ctx)
+			if err == nil {
+				c.leaderAddress.Store(leaderAddr)
+			}
 		}
-		retryCount++
-		time.Sleep(retryTime)
-		retryTime *= 2
+		if i == c.maxRetries-1 {
+			return fmt.Errorf("fail to put key=%s, value=%s %s", key, value, err)
+		}
+		if i < c.maxRetries {
+			c.clk.Sleep(retryTime)
+			retryTime *= 2
+			continue
+		}
 	}
 	return fmt.Errorf("fail to put key=%s, value=%s", key, value)
 }
@@ -274,7 +277,7 @@ func (c *Client) findLeader(ctx context.Context) (string, error) {
 
 	for _, addr := range c.addresses {
 		leaderAddr, err := func() (string, error) {
-			findCtx, findCancel := context.WithTimeout(ctx, time.Second*2)
+			findCtx, findCancel := clockwork.WithTimeout(ctx, c.clk, time.Second*2)
 			defer findCancel()
 			reqURL := fmt.Sprintf("http://%s/status", addr)
 			httpRequest, _ := http.NewRequestWithContext(findCtx, http.MethodGet, reqURL, nil)
@@ -288,7 +291,7 @@ func (c *Client) findLeader(ctx context.Context) (string, error) {
 				return "", fmt.Errorf("bad status: %s", resp.Status)
 			}
 
-			if resp.StatusCode == 200 {
+			if resp.StatusCode == http.StatusOK {
 				body, err := io.ReadAll(resp.Body)
 				if err != nil {
 					return "", fmt.Errorf("fail to read leader info: %v", err)
@@ -299,7 +302,6 @@ func (c *Client) findLeader(ctx context.Context) (string, error) {
 				if err != nil {
 					return "", fmt.Errorf("fail to unmarshal leader info: %v", err)
 				}
-				log.Printf("Leader info: %v", leaderInfo)
 				if leaderInfo.IsLead {
 					if leaderAddr, ok := c.addresses[leaderInfo.LeaderID]; ok {
 						return leaderAddr, nil
@@ -309,6 +311,7 @@ func (c *Client) findLeader(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("fail to get leader info")
 		}()
 		if err == nil {
+			c.leaderAddress.Store(leaderAddr)
 			return leaderAddr, nil
 		}
 	}
