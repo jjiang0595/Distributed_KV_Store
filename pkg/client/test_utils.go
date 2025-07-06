@@ -204,19 +204,18 @@ func (m *MockHTTPRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	return resp, nil
 }
 
-func cleanup(t *testing.T, testNodes map[string]*cluster.Node, httpServers map[string]*serverapp.HTTPServer) {
-	t.Cleanup(func() {
-		for _, node := range testNodes {
-			go node.Shutdown()
-		}
-		for _, httpServer := range httpServers {
-			httpServer.Stop()
-		}
-		for _, node := range testNodes {
-			node.WaitAllGoroutines()
-		}
-
-	})
+func (t *TestCluster) cleanup() {
+	for _, node := range t.TestNodes {
+		go node.Shutdown()
+	}
+	for _, httpServer := range t.HttpServers {
+		httpServer.Stop()
+	}
+	for _, node := range t.TestNodes {
+		node.WaitAllGoroutines()
+		t.MockHTTPRT.DeregisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), t.HttpServers[node.ID].GetServer().Handler)
+		t.MockTransport.UnregisterRPCServer(node)
+	}
 }
 
 func findLeader(t *testing.T, clk *clockwork.FakeClock, testNodes map[string]*cluster.Node, checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) string {
