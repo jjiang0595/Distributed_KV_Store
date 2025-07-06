@@ -286,6 +286,7 @@ func (n *Node) ProposeCommand(cmdBytes []byte) error {
 		Command: cmdBytes,
 		errorCh: make(chan error, 1),
 	}
+
 	select {
 	case n.clientCommandChan <- proposeReq:
 		select {
@@ -300,11 +301,12 @@ func (n *Node) ProposeCommand(cmdBytes []byte) error {
 }
 
 func (n *Node) GetLeaderInfo() (string, string, bool) {
+	leaderID := n.GetLeaderID()
 	if n.GetState() != Leader {
-		if n.GetLeaderID() != "" {
-			return n.GetLeaderID(), n.ID, true
+		if leaderID != "" {
+			return n.ID, leaderID, true
 		}
-		return "", n.ID, false
+		return n.ID, n.leaderID, false
 	}
 	return n.ID, n.ID, true
 }
