@@ -98,11 +98,22 @@ func testSetup(t *testing.T) *TestCluster {
 type MockHTTPRoundTripper struct {
 	mu       sync.RWMutex
 	handlers map[string]http.Handler
+	clk      *clockwork.FakeClock
+
+	failCount             int
+	currentFails          int
+	simulatedHTTPStatus   int
+	simulatedNetworkError error
+	simulatedDelay        time.Duration
 }
 
-func NewMockHTTPRoundTripper() *MockHTTPRoundTripper {
+func NewMockHTTPRoundTripper(clock *clockwork.FakeClock) *MockHTTPRoundTripper {
 	return &MockHTTPRoundTripper{
-		handlers: make(map[string]http.Handler),
+		clk:            clock,
+		handlers:       make(map[string]http.Handler),
+		simulatedDelay: 0 * time.Millisecond,
+		failCount:      0,
+		currentFails:   0,
 	}
 }
 
@@ -110,6 +121,27 @@ func (m *MockHTTPRoundTripper) RegisterHandler(address string, handler http.Hand
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.handlers[address] = handler
+}
+
+func (m *MockHTTPRoundTripper) DeregisterHandler(address string, handler http.Handler) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.handlers, address)
+}
+
+func (m *MockHTTPRoundTripper) SetDelay(delay time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.simulatedDelay = delay
+}
+
+func (m *MockHTTPRoundTripper) SetTransientError(failCount int, httpStatus int, networkError error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failCount = failCount
+	m.simulatedHTTPStatus = httpStatus
+	m.simulatedNetworkError = networkError
+	m.currentFails = 0
 }
 
 func (m *MockHTTPRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
