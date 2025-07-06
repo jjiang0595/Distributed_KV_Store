@@ -259,6 +259,31 @@ LeaderCheck:
 	return followerID, leaderID
 }
 
+func waitForLeader(t *testing.T, clk *clockwork.FakeClock, leaderID string, testNodes map[string]*cluster.Node, checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) {
+WaitForLeader:
+	for {
+		select {
+		case <-checkTicker.Chan():
+			stateUpdated := true
+			for nodeID, node := range testNodes {
+				if nodeID == leaderID {
+					continue
+				}
+				if node.GetLeaderID() != leaderID {
+					stateUpdated = false
+					break
+				}
+			}
+			if stateUpdated {
+				break WaitForLeader
+			}
+		case <-exitTicker.Chan():
+			t.Fatalf("Follower's leaderID not updated within 10 secs")
+		default:
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}
 }
 
 func filterSelfID(nodeID string, nodes []string) []string {
