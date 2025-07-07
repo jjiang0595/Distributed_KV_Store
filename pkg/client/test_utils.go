@@ -65,7 +65,7 @@ func testSetup(t *testing.T) *TestCluster {
 	for i := 0; i < len(testNodes); i++ {
 		nodeID := fmt.Sprintf("node%d", i+1)
 		node := testNodes[nodeID]
-		httpServers[nodeID] = serverapp.NewHTTPServer(nodeID, node.GetKVStore(), node.ProposeCommand, node.GetLeaderInfo, peerHTTPAddresses, node.Port)
+		httpServers[nodeID] = serverapp.NewHTTPServer(node, node.ProposeCommand, node.GetLeaderInfo, peerHTTPAddresses, node.Port)
 		mockHTTPRT.RegisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), httpServers[nodeID].GetServer().Handler)
 		httpServers[nodeID].Start()
 	}
@@ -204,21 +204,21 @@ func (m *MockHTTPRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	return resp, nil
 }
 
-func (t *TestCluster) cleanup() {
-	for _, node := range t.TestNodes {
+func (test *TestCluster) cleanup() {
+	for _, node := range test.TestNodes {
 		go node.Shutdown()
 	}
-	for _, httpServer := range t.HttpServers {
+	for _, httpServer := range test.HttpServers {
 		httpServer.Stop()
 	}
-	for _, node := range t.TestNodes {
+	for _, node := range test.TestNodes {
 		node.WaitAllGoroutines()
-		t.MockHTTPRT.DeregisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), t.HttpServers[node.ID].GetServer().Handler)
-		t.MockTransport.UnregisterRPCServer(node)
+		test.MockHTTPRT.DeregisterHandler(fmt.Sprintf("%s:%v", node.Address, node.Port), test.HttpServers[node.ID].GetServer().Handler)
+		test.MockTransport.UnregisterRPCServer(node)
 	}
 }
 
-func setupLeader(t *testing.T, clk *clockwork.FakeClock, testNodes map[string]*cluster.Node, checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) (string, string) {
+func (test *TestCluster) setupLeader(checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) (string, string) {
 	leaderFound := false
 	leaderID := ""
 	followerID := ""
@@ -227,7 +227,7 @@ LeaderCheck:
 	for {
 		select {
 		case <-checkTicker.Chan():
-			for _, node := range testNodes {
+			for _, node := range test.TestNodes {
 				if node.GetState() == cluster.Leader {
 					leaderFound = true
 					leaderID = node.ID
@@ -240,7 +240,7 @@ LeaderCheck:
 			}
 
 		case <-exitTicker.Chan():
-			for _, node := range testNodes {
+			for _, node := range test.TestNodes {
 				if node.GetState() == cluster.Leader {
 					leaderFound = true
 				}
@@ -248,24 +248,26 @@ LeaderCheck:
 			break LeaderCheck
 
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
 	if !leaderFound {
-		t.Fatalf("Error: Leader not found within time limit")
+		test.T.Fatalf("Error: Leader not found within time limit")
 	}
+
+	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
 	return followerID, leaderID
 }
 
-func waitForLeader(t *testing.T, clk *clockwork.FakeClock, leaderID string, testNodes map[string]*cluster.Node, checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) {
+func (test *TestCluster) waitForLeader(leaderID string, checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) {
 WaitForLeader:
 	for {
 		select {
 		case <-checkTicker.Chan():
 			stateUpdated := true
-			for nodeID, node := range testNodes {
+			for nodeID, node := range test.TestNodes {
 				if nodeID == leaderID {
 					continue
 				}
@@ -278,9 +280,9 @@ WaitForLeader:
 				break WaitForLeader
 			}
 		case <-exitTicker.Chan():
-			t.Fatalf("Follower's leaderID not updated within 10 secs")
+			test.T.Fatalf("Follower's leaderID not updated within 10 secs")
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
