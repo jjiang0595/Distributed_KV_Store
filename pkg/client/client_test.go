@@ -351,4 +351,25 @@ func TestClient_Get_LeaderAddressUpdate(t *testing.T) {
 	t.Fatalf("Error: Didn't update leader address")
 }
 
+func TestClient_Get_FollowerRedirect(t *testing.T) {
+	test := testSetup(t)
+	defer test.cleanup()
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	followerID, leaderID := test.setupLeader(checkTicker, exitTicker)
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[followerID])
+	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer cancel()
+	_, err := test.Client.GET(ctx, "testKey")
+	if err != nil {
+		if err.Error() != "" && strings.Contains(err.Error(), "Resource Not Found") && test.Client.leaderAddress.Load() == test.PeerHTTPAddrs[leaderID] {
+			t.Logf("Success: Correctly updated leader address after redirect")
+			return
+		}
+	}
+	t.Fatalf("Error: Didn't update leader address")
 }
