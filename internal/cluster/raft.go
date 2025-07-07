@@ -300,15 +300,15 @@ func (n *Node) ProposeCommand(cmdBytes []byte) error {
 	}
 }
 
-func (n *Node) GetLeaderInfo() (string, string, bool) {
+func (n *Node) GetLeaderInfo() (string, bool) {
 	leaderID := n.GetLeaderID()
 	if n.GetState() != Leader {
 		if leaderID != "" {
-			return n.ID, leaderID, true
+			return leaderID, false
 		}
-		return n.ID, n.leaderID, false
+		return "", false
 	}
-	return n.ID, n.ID, true
+	return n.ID, true
 }
 
 func (n *Node) RunRaftLoop() {
