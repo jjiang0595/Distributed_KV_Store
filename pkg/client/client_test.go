@@ -328,7 +328,27 @@ func TestClient_Get_NotFound(t *testing.T) {
 	t.Fatalf("Error: Unexpected error while handling missing key")
 }
 
+func TestClient_Get_LeaderAddressUpdate(t *testing.T) {
+	test := testSetup(t)
+	defer test.cleanup()
 
-	t.Logf("Success: Processed Client GET Request")
-	cleanup(t, testNodes, httpServers)
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.Client.leaderAddress.Store("")
+	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer cancel()
+	_, err := test.Client.GET(ctx, "testKey")
+	if err != nil {
+		if err.Error() != "" && strings.Contains(err.Error(), "Resource Not Found") && test.Client.leaderAddress.Load() == test.PeerHTTPAddrs[leaderID] {
+			t.Logf("Success: Correctly updated leader address")
+			return
+		}
+	}
+	t.Fatalf("Error: Didn't update leader address")
+}
+
 }
