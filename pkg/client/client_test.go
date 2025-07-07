@@ -373,3 +373,37 @@ func TestClient_Get_FollowerRedirect(t *testing.T) {
 	}
 	t.Fatalf("Error: Didn't update leader address")
 }
+
+func TestClient_Get_TransientError(t *testing.T) {
+	test := testSetup(t)
+	defer test.cleanup()
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
+
+	key := "testKey"
+	value := "testValue"
+
+	putCtx, putCancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer putCancel()
+	err := test.Client.PUT(putCtx, key, value)
+	if err != nil {
+		t.Fatalf("Error putting key: %v", err)
+	}
+
+	test.MockHTTPRT.SetTransientError(2, http.StatusRequestTimeout, nil)
+	getCtx, getCancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer getCancel()
+	_, err = test.Client.GET(getCtx, key)
+	if err != nil {
+		t.Fatalf("Error: Fail to get key %s, %s", key, err.Error())
+	}
+	t.Logf("Success: Retrieved value after two initial transient errors (timeouts).")
+	return
+}
+
+func TestClient_Get_MaxRetries
