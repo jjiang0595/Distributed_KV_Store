@@ -249,15 +249,19 @@ func TestClient_Put_ContextTimeout(t *testing.T) {
 
 }
 
+func TestClient_Get_Success(t *testing.T) {
+	test := testSetup(t)
+	defer test.cleanup()
 
-	c := NewClient(peerHTTPAddresses, WithTimeout(5*time.Second), WithMaxRetries(3), WithHTTPTransport(mockHTTPRT))
+	test.Client = NewClient(test.PeerHTTPAddrs, WithTimeout(5*time.Second), WithMaxRetries(3), WithHTTPTransport(test.MockHTTPRT))
+	c := test.Client
 
-	checkTicker := clk.NewTicker(50 * time.Millisecond)
-	exitTicker := clk.NewTicker(1 * time.Second)
-	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(1 * time.Second)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 
-	c.leaderAddress.Store(peerHTTPAddresses[leaderID])
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	c.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
+	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 3*time.Second)
 	defer cancel()
 	testKey := "testKey"
 	testValue := "testValue"
@@ -275,9 +279,9 @@ ReplicationCheck:
 		select {
 		case <-checkTicker.Chan():
 			replicated = true
-			for nodeID, _ := range testNodes {
-				t.Logf("%s: %v", nodeID, kvStores[nodeID].GetData())
-				if value, ok := kvStores[nodeID].Get(testKey); !ok || value != testValue {
+			for nodeID, _ := range test.TestNodes {
+				t.Logf("%s: %v", nodeID, test.KvStores[nodeID].GetData())
+				if value, ok := test.KvStores[nodeID].Get(testKey); !ok || value != testValue {
 					replicated = false
 					break
 				}
@@ -288,21 +292,18 @@ ReplicationCheck:
 		case <-exitTicker.Chan():
 			t.Fatalf("Logs not replicated within 10 secs")
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
-	val, err := c.GET(ctx, testKey)
-	if err != nil {
-		t.Fatalf("Error getting key: %v", err)
+	if val, ok := c.GET(ctx, testKey); ok == nil && (val == testValue) {
+		t.Logf("Success: Retreived correct GET value. Key %s -> %s", testKey, val)
+		return
 	}
-	clk.Advance(50 * time.Millisecond)
-	runtime.Gosched()
+	t.Fatalf("Error: Invalid or missing value")
+}
 
-	log.Printf("%v", val)
-	if val != testValue {
-		t.Fatalf("Error: Invalid value. Expected %v, got %v", len(testValue), len(val))
 	}
 
 	t.Logf("Success: Processed Client GET Request")
