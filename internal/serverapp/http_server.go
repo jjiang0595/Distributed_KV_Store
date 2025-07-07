@@ -15,10 +15,10 @@ import (
 )
 
 type HTTPServer struct {
-	nodeID            string
-	kvStore           *cluster.KVStore
-	proposeCommand    func(cmd []byte) error
-	getLeaderInfo     func() (string, string, bool)
+	node           *cluster.Node
+	proposeCommand func(cmd []byte) error
+
+	getLeaderInfo     func() (string, bool)
 	server            *http.Server
 	port              int
 	peerHTTPAddresses map[string]string
@@ -26,7 +26,6 @@ type HTTPServer struct {
 }
 
 type LeaderInfo struct {
-	NodeID   string `json:"node_id"`
 	LeaderID string `json:"leader_id"`
 	IsLead   bool   `json:"is_leader"`
 }
@@ -37,11 +36,10 @@ func (s *HTTPServer) GetServer() *http.Server {
 	return s.server
 }
 
-func NewHTTPServer(nodeID string, kvStore *cluster.KVStore, proposeCmd func(cmd []byte) error, getLeaderInfo func() (string, string, bool), peerHTTPAddresses map[string]string, port int) *HTTPServer {
+func NewHTTPServer(node *cluster.Node, proposeCmd func(cmd []byte) error, getLeaderInfo func() (string, bool), peerHTTPAddresses map[string]string, port int) *HTTPServer {
 	mux := http.NewServeMux()
 	s := &HTTPServer{
-		nodeID:            nodeID,
-		kvStore:           kvStore,
+		node:              node,
 		proposeCommand:    proposeCmd,
 		getLeaderInfo:     getLeaderInfo,
 		server:            &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux},
@@ -56,7 +54,7 @@ func NewHTTPServer(nodeID string, kvStore *cluster.KVStore, proposeCmd func(cmd 
 func (s *HTTPServer) Start() {
 	go func() {
 		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("%s HTTP Server Failed: %v", s.nodeID, err)
+			log.Fatalf("%s HTTP Server Failed: %v", s.node.ID, err)
 		}
 	}()
 }
@@ -66,15 +64,14 @@ func (s *HTTPServer) Stop() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := s.server.Shutdown(ctx); err != nil {
-			log.Printf("%s HTTP Server Shutdown Failed: %v", s.nodeID, err)
+			log.Printf("%s HTTP Server Shutdown Failed: %v", s.node.ID, err)
 		}
 	}
 }
 
 func (s *HTTPServer) handleStatusRequest(w http.ResponseWriter, r *http.Request) {
-	nodeId, leaderID, isLead := s.getLeaderInfo()
+	leaderID, isLead := s.getLeaderInfo()
 	leaderInfo := &LeaderInfo{
-		NodeID:   nodeId,
 		LeaderID: leaderID,
 		IsLead:   isLead,
 	}
