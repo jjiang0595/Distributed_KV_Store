@@ -40,10 +40,11 @@ func TestMain(m *testing.M) {
 
 func TestClient_Put_LeaderDiscovery(t *testing.T) {
 	test := testSetup(t)
+	defer test.cleanup()
 
 	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(2 * time.Second)
-	setupLeader(t, test.Clock, test.TestNodes, checkTicker, exitTicker)
+	test.setupLeader(checkTicker, exitTicker)
 
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 3*time.Second)
 	defer cancel()
@@ -81,19 +82,19 @@ ReplicationCheck:
 		}
 	}
 	t.Logf("Success: Client PUT request replicated")
-	test.cleanup()
 }
 
 func TestClient_Put_FollowerRedirects(t *testing.T) {
 	test := testSetup(t)
+	defer test.cleanup()
 
 	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(2 * time.Second)
-	followerID, leaderID := setupLeader(t, test.Clock, test.TestNodes, checkTicker, exitTicker)
+	followerID, leaderID := test.setupLeader(checkTicker, exitTicker)
 	checkTicker.Reset(50 * time.Millisecond)
 	exitTicker.Reset(5 * time.Second)
 
-	waitForLeader(t, test.Clock, leaderID, test.TestNodes, checkTicker, exitTicker)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[followerID])
 
@@ -133,21 +134,21 @@ ReplicationCheck:
 		}
 	}
 	t.Logf("Success: Successfully redirected & client PUT request replicated")
-	test.cleanup()
 }
 
 func TestClient_Put_TransientError(t *testing.T) {
 	test := testSetup(t)
+	defer test.cleanup()
 
 	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(2 * time.Second)
-	_, leaderID := setupLeader(t, test.Clock, test.TestNodes, checkTicker, exitTicker)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
 
 	checkTicker.Reset(50 * time.Millisecond)
 	exitTicker.Reset(5 * time.Second)
 
-	waitForLeader(t, test.Clock, leaderID, test.TestNodes, checkTicker, exitTicker)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	test.MockHTTPRT.SetTransientError(1, http.StatusServiceUnavailable, nil)
 
@@ -185,21 +186,21 @@ ReplicationCheck:
 		}
 	}
 	t.Logf("Success: Handled errors & Client PUT request replicated")
-	test.cleanup()
 }
 
 func TestClient_Put_MaxRetries(t *testing.T) {
 	test := testSetup(t)
+	defer test.cleanup()
 
 	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(2 * time.Second)
-	_, leaderID := setupLeader(t, test.Clock, test.TestNodes, checkTicker, exitTicker)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
 
 	checkTicker.Reset(50 * time.Millisecond)
 	exitTicker.Reset(5 * time.Second)
 
-	waitForLeader(t, test.Clock, leaderID, test.TestNodes, checkTicker, exitTicker)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	test.MockHTTPRT.SetTransientError(3, http.StatusServiceUnavailable, nil)
 
@@ -223,13 +224,13 @@ func TestClient_Put_ContextTimeout(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(2 * time.Second)
-	_, leaderID := setupLeader(t, test.Clock, test.TestNodes, checkTicker, exitTicker)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
 
 	checkTicker.Reset(50 * time.Millisecond)
 	exitTicker.Reset(5 * time.Second)
 
-	waitForLeader(t, test.Clock, leaderID, test.TestNodes, checkTicker, exitTicker)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	test.MockHTTPRT.SetDelay(200 * time.Millisecond)
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
@@ -240,7 +241,6 @@ func TestClient_Put_ContextTimeout(t *testing.T) {
 		log.Printf("Error putting key: %v", err.Error())
 		if strings.Contains(err.Error(), "context deadline exceeded") {
 			t.Logf("Success: Context timeout exceeded")
-			test.cleanup()
 			return
 		}
 		t.Fatal("Error: Wrong error code")
