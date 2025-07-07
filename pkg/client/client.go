@@ -19,6 +19,7 @@ import (
 type Option func(*Client)
 
 var httpErrorMessages = map[int]string{
+	307: "Redirecting to Leader",
 	404: "Resource Not Found",
 	408: "Request Timeout",
 	500: "Internal Server Error",
@@ -114,6 +115,7 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 		return fmt.Errorf("no addresses")
 	}
 
+	maxRetryTime := 2 * time.Second
 	retryTime := 50 * time.Millisecond
 
 	var serverAddress string
@@ -219,7 +221,7 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 		}
 		if i < c.maxRetries {
 			c.clk.Sleep(retryTime)
-			retryTime *= 2
+			retryTime = min(retryTime*2, maxRetryTime)
 			continue
 		}
 	}
@@ -230,42 +232,93 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 	if len(c.addresses) == 0 {
 		return "", fmt.Errorf("no addresses")
 	}
-
-	var serverAddress string
-	if c.leaderAddress.Load() == "" {
-		for _, addr := range c.addresses {
-			c.leaderAddress.Store(addr)
-			break
-		}
-	} else {
-		serverAddress = c.leaderAddress.Load().(string)
-	}
-
-	reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
-	httpRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-
-	resp, err := c.httpClient.Do(httpRequest)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("bad status: %s", resp.Status)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
 	var bodyString string
-	if err := json.Unmarshal(body, &bodyString); err != nil {
-		return "", fmt.Errorf("fail to unmarshal JSON response: %w", err)
-	}
+	retryTime := 50 * time.Millisecond
+	maxRetryTime := 2 * time.Second
 
-	log.Printf("%v", len(string(body)))
-	return bodyString, nil
+	for i := 0; i < c.maxRetries; i++ {
+		serverAddress := c.GetLeader(ctx)
+
+		reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
+		httpRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+		log.Printf("ADDRESS IS %s", serverAddress)
+		statusCode, err := func() (int, error) {
+			resp, err := c.httpClient.Do(httpRequest)
+			if err != nil {
+				log.Printf("fail to get key %s: %v", key, err)
+				return 0, err
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode == http.StatusOK {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return 0, err
+				}
+
+				if err := json.Unmarshal(body, &bodyString); err != nil {
+					return 0, fmt.Errorf("fail to unmarshal JSON response: %w", err)
+				}
+				return http.StatusOK, nil
+			}
+			if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
+				return resp.StatusCode, nil
+			}
+			if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+				leader := resp.Header.Get("Leader")
+				if leader == "" {
+					return 0, fmt.Errorf("leader not found")
+				}
+				parsedUrl, err := url.Parse(leader)
+				if err != nil {
+					return 0, fmt.Errorf("fail to parse leader URL: %s", err)
+				}
+				c.leaderAddress.Store(parsedUrl.Host)
+				return http.StatusTemporaryRedirect, nil
+			}
+			if resp.StatusCode == http.StatusInternalServerError || resp.StatusCode == http.StatusNotFound {
+				return resp.StatusCode, nil
+			}
+			return resp.StatusCode, fmt.Errorf("unexpected status code %v", resp.StatusCode)
+		}()
+
+		if err == nil {
+			if statusCode >= 200 && statusCode <= 299 {
+				return bodyString, nil
+			}
+			if statusCode >= 300 && statusCode <= 399 {
+				continue
+			}
+			if statusCode == http.StatusNotFound || statusCode == http.StatusInternalServerError {
+				return "", fmt.Errorf("%s", httpErrorMessages[statusCode])
+			} else if statusCode == http.StatusRequestTimeout || statusCode == http.StatusServiceUnavailable {
+				if i == c.maxRetries-1 {
+					return "", fmt.Errorf("%s", httpErrorMessages[statusCode])
+				}
+				c.leaderAddress.Store("")
+				leaderAddr, err := c.findLeader(ctx)
+				if err == nil {
+					c.leaderAddress.Store(leaderAddr)
+				}
+				continue
+			}
+		} else {
+			c.leaderAddress.Store("")
+			leaderAddr, err := c.findLeader(ctx)
+			if err == nil {
+				c.leaderAddress.Store(leaderAddr)
+			}
+		}
+		if i == c.maxRetries-1 {
+			return "", fmt.Errorf("fail to get key=%s, %s", key, err)
+		}
+		if i < c.maxRetries {
+			c.clk.Sleep(retryTime)
+			retryTime = min(retryTime*2, maxRetryTime)
+			continue
+		}
+	}
+	return "", fmt.Errorf("fail to get key %s", key)
 }
 
 func (c *Client) findLeader(ctx context.Context) (string, error) {
