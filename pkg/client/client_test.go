@@ -304,7 +304,30 @@ ReplicationCheck:
 	t.Fatalf("Error: Invalid or missing value")
 }
 
+func TestClient_Get_NotFound(t *testing.T) {
+	test := testSetup(t)
+	defer test.cleanup()
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
+
+	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer cancel()
+	if value, err := test.Client.GET(ctx, "missingKey"); value == "" && err != nil {
+		if err.Error() != "" && strings.Contains(err.Error(), "Resource Not Found") {
+			t.Logf("Error getting key: %v", err.Error())
+			t.Logf("Success: Handled missing key successfully")
+			return
+		}
 	}
+	t.Fatalf("Error: Unexpected error while handling missing key")
+}
+
 
 	t.Logf("Success: Processed Client GET Request")
 	cleanup(t, testNodes, httpServers)
