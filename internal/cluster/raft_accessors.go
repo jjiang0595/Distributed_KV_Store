@@ -19,8 +19,8 @@ func (n *Node) GetVotedFor() string {
 }
 
 func (n *Node) GetLog() []*LogEntry {
-	n.rwMu.RLock()
-	defer n.rwMu.RUnlock()
+	n.raftMu.Lock()
+	defer n.raftMu.Unlock()
 	logCopy := make([]*LogEntry, 0, len(n.log))
 	for _, logEntry := range n.log {
 		if logEntry != nil {
