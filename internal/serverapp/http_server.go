@@ -107,6 +107,17 @@ func (s *HTTPServer) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, key string) {
+	leaderID, isLead := s.getLeaderInfo()
+	if !isLead {
+		if leaderID != "" {
+			http.Redirect(w, r, fmt.Sprintf("http://%s/key/%s", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
+			return
+		} else {
+			http.Error(w, fmt.Sprintf("Internal Server error: %v", http.StatusNotFound), http.StatusNotFound)
+			return
+		}
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

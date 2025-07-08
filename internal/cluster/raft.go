@@ -276,12 +276,6 @@ func (n *Node) sendVoteRequestToPeer(voteCtx context.Context, voteCancel context
 }
 
 func (n *Node) ProposeCommand(cmdBytes []byte) error {
-	if n.GetState() != Leader {
-		if n.GetLeaderID() != "" {
-			return fmt.Errorf("not leader, current leader is %s", n.leaderID)
-		}
-		return fmt.Errorf("not leader")
-	}
 	proposeReq := &ProposeRequest{
 		Command: cmdBytes,
 		errorCh: make(chan error, 1),
