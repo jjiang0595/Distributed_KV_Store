@@ -118,6 +118,7 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 	maxRetryTime := 2 * time.Second
 	retryTime := 50 * time.Millisecond
 
+	var lastErr error
 	var serverAddress string
 
 	cmd := &cluster.Command{
@@ -150,6 +151,9 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 			log.Printf("HTTP request to %s", reqURL)
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := c.httpClient.Do(req)
+			defer func() {
+				lastErr = classifyHTTPError(key, resp, err)
+			}()
 			if err != nil {
 				return 0, fmt.Errorf("network/client error: %w", err)
 			}
@@ -198,9 +202,6 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 				return fmt.Errorf("error: %s", httpErrorMessages[statusCode])
 			}
 			if statusCode == http.StatusRequestTimeout || statusCode == http.StatusServiceUnavailable || statusCode == http.StatusGatewayTimeout {
-				if i == c.maxRetries-1 {
-					return fmt.Errorf("%s", httpErrorMessages[statusCode])
-				}
 				c.leaderAddress.Store("")
 				leaderAddr, err := c.findLeader(ctx)
 				if err == nil {
@@ -216,22 +217,24 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 				c.leaderAddress.Store(leaderAddr)
 			}
 		}
-		if i == c.maxRetries-1 {
-			return fmt.Errorf("fail to put key=%s, value=%s %s", key, value, err)
-		}
 		if i < c.maxRetries {
 			c.clk.Sleep(retryTime)
 			retryTime = min(retryTime*2, maxRetryTime)
 			continue
 		}
 	}
-	return fmt.Errorf("fail to put key=%s, value=%s", key, value)
+	return ErrMaxRetries{
+		Type:    http.MethodPut,
+		Retries: c.maxRetries,
+		LastErr: lastErr,
+	}
 }
 
 func (c *Client) GET(ctx context.Context, key string) (string, error) {
 	if len(c.addresses) == 0 {
 		return "", fmt.Errorf("no addresses")
 	}
+	var lastErr error
 	var bodyString string
 	retryTime := 50 * time.Millisecond
 	maxRetryTime := 2 * time.Second
@@ -247,6 +250,9 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 
 		statusCode, err := func() (int, error) {
 			resp, err := c.httpClient.Do(httpRequest)
+			defer func() {
+				lastErr = classifyHTTPError(key, resp, err)
+			}()
 			if err != nil {
 				log.Printf("fail to get key %s: %v", key, err)
 				return 0, err
@@ -293,11 +299,9 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 				continue
 			}
 			if statusCode == http.StatusNotFound || statusCode == http.StatusInternalServerError {
-				return "", fmt.Errorf("%s", httpErrorMessages[statusCode])
-			} else if statusCode == http.StatusRequestTimeout || statusCode == http.StatusServiceUnavailable {
-				if i == c.maxRetries-1 {
-					return "", fmt.Errorf("%s", httpErrorMessages[statusCode])
-				}
+				return "", lastErr
+			}
+			if statusCode == http.StatusRequestTimeout || statusCode == http.StatusServiceUnavailable {
 				log.Printf("Attempt %d: Retrying GET request...", i+1)
 				c.leaderAddress.Store("")
 				leaderAddr, err := c.findLeader(ctx)
@@ -313,16 +317,17 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 				c.leaderAddress.Store(leaderAddr)
 			}
 		}
-		if i == c.maxRetries-1 {
-			return "", fmt.Errorf("fail to get key=%s, %s", key, err)
-		}
 		if i < c.maxRetries {
 			c.clk.Sleep(retryTime)
 			retryTime = min(retryTime*2, maxRetryTime)
 			continue
 		}
 	}
-	return "", fmt.Errorf("fail to get key %s", key)
+	return "", ErrMaxRetries{
+		Type:    http.MethodGet,
+		Retries: c.maxRetries,
+		LastErr: lastErr,
+	}
 }
 
 func (c *Client) findLeader(ctx context.Context) (string, error) {
