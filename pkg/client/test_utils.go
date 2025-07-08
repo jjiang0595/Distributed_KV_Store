@@ -70,7 +70,14 @@ func testSetup(t *testing.T) *TestCluster {
 		httpServers[nodeID].Start()
 	}
 
-	c := NewClient(peerHTTPAddresses, WithClock(clk), WithHTTPTransport(mockHTTPRT))
+	c := NewClient(peerHTTPAddresses, WithMaxRetries(3), WithClock(clk), WithTimeout(200*time.Millisecond), WithHTTPTransport(mockHTTPRT))
+
+	go func() {
+		for {
+			clk.Advance(5 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}()
 
 	testNodesWg := sync.WaitGroup{}
 	for _, node := range testNodes {
