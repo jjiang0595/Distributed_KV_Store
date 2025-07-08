@@ -111,11 +111,10 @@ func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, ke
 	if !isLead {
 		if leaderID != "" {
 			http.Redirect(w, r, fmt.Sprintf("http://%s/key/%s", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
-			return
 		} else {
 			http.Error(w, fmt.Sprintf("Internal Server error: %v", http.StatusNotFound), http.StatusNotFound)
-			return
 		}
+		return
 	}
 
 	body, err := io.ReadAll(r.Body)
