@@ -440,3 +440,37 @@ func TestClient_Get_MaxRetries(t *testing.T) {
 	t.Fatalf("Error: Invalid error while injecting maximum number of errors")
 }
 
+func TestClient_Get_ContextTimeout(t *testing.T) {
+	test := testSetup(t)
+	defer test.cleanup()
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
+
+	key := "testKey"
+	value := "testValue"
+	putCtx, putCancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer putCancel()
+	err := test.Client.PUT(putCtx, key, value)
+	if err != nil {
+		t.Fatalf("Error putting key: %v", err)
+	}
+
+	test.MockHTTPRT.SetDelay(1 * time.Second)
+	getCtx, getCancel := clockwork.WithTimeout(context.Background(), test.Clock, 150*time.Millisecond)
+	defer getCancel()
+	_, err = test.Client.GET(getCtx, key)
+	if err != nil {
+		if err.Error() != "" && strings.Contains(err.Error(), "context deadline") {
+			t.Logf("Success: Correct error after context timed out after exceeding timeout")
+			return
+		}
+	}
+	t.Fatalf("Error: Incorrect response after context timeout")
+}
+
