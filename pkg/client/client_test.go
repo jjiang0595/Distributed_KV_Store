@@ -220,7 +220,7 @@ func TestClient_Put_MaxRetries(t *testing.T) {
 
 func TestClient_Put_ContextTimeout(t *testing.T) {
 	test := testSetup(t)
-	test.Client = NewClient(test.PeerHTTPAddrs, WithMaxRetries(1), WithTimeout(100*time.Millisecond), WithHTTPTransport(test.MockHTTPRT))
+	defer test.cleanup()
 
 	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(2 * time.Second)
@@ -228,11 +228,11 @@ func TestClient_Put_ContextTimeout(t *testing.T) {
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
 
 	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	exitTicker.Reset(2 * time.Second)
 
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
-	test.MockHTTPRT.SetDelay(200 * time.Millisecond)
+	test.MockHTTPRT.SetDelay(1 * time.Second)
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
 	defer cancel()
 	err := test.Client.PUT(ctx, "testKey", "testValue")
