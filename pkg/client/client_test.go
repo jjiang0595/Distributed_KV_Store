@@ -474,3 +474,26 @@ func TestClient_Get_ContextTimeout(t *testing.T) {
 	t.Fatalf("Error: Incorrect response after context timeout")
 }
 
+func TestClient_Get_NonRetryableError(t *testing.T) {
+	test := testSetup(t)
+	defer test.cleanup()
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
+
+	test.MockHTTPRT.SetTransientError(1, http.StatusNotFound, nil)
+	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer cancel()
+	val, err := test.Client.GET(ctx, "testKey")
+	if err != nil {
+		if val == "" && err.Error() != "" && strings.Contains(err.Error(), "Resource Not Found") {
+			t.Logf("Success: Return error immediately after non-retriable error.")
+			return
+		}
+	}
+	t.Fatalf("Error: Invalid error while injecting non-retriable error")
+}
