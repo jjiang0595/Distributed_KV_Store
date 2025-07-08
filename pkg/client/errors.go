@@ -9,6 +9,47 @@ import (
 	"net/url"
 )
 
+func classifyHTTPError(key string, resp *http.Response, err error) error {
+	if err != nil {
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			if errors.Is(urlErr.Err, context.DeadlineExceeded) || errors.Is(urlErr.Err, context.Canceled) {
+				return ErrTimeout{
+					Key:     key,
+					Message: err.Error(),
+					Err:     err,
+				}
+			}
+		}
+
+		return ErrNetwork{
+			Key:     key,
+			Message: err.Error(),
+			Err:     err,
+		}
+	}
+
+	statusCode := resp.StatusCode
+	switch statusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusTemporaryRedirect:
+		return ErrRedirect{Key: key, StatusCode: statusCode, Message: httpErrorMessages[statusCode]}
+	case http.StatusRequestTimeout:
+		return ErrRequestTimeout{Key: key, StatusCode: statusCode, Message: httpErrorMessages[statusCode]}
+	case http.StatusNotFound:
+		return ErrNotFound{Key: key, StatusCode: statusCode, Message: httpErrorMessages[statusCode]}
+	case http.StatusGatewayTimeout:
+		return ErrStatusGatewayTimeout{Key: key, StatusCode: statusCode, Message: httpErrorMessages[statusCode]}
+	case http.StatusInternalServerError:
+		return ErrInternalServer{Key: key, StatusCode: statusCode, Message: httpErrorMessages[statusCode]}
+	case http.StatusServiceUnavailable:
+		return ErrServiceUnavailable{Key: key, StatusCode: statusCode, Message: httpErrorMessages[statusCode]}
+	default:
+		return ErrUnexpectedHTTPStatus{Key: key, StatusCode: statusCode, Message: fmt.Sprintf("unexpected HTTP status code: %d", statusCode)}
+	}
+}
+
 type ErrNetwork struct {
 	Key     string
 	Message string
