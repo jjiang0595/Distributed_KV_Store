@@ -524,7 +524,9 @@ func (n *Node) RunRaftLoop() {
 						Command: []byte("NO_OP_ENTRY"),
 					}
 					n.log = append(n.log, noOpEntry)
+					n.rwMu.Lock()
 					n.dirtyPersistenceState = true
+					n.rwMu.Unlock()
 					select {
 					case n.persistStateChan <- struct{}{}:
 					default:
