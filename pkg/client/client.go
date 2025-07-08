@@ -120,22 +120,22 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 
 	var serverAddress string
 
+	cmd := &cluster.Command{
+		Type:  cluster.CommandPut,
+		Key:   key,
+		Value: value,
+	}
+
+	var cmdToBytes []byte
+	cmdToBytes, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+
 	for i := 0; i < c.maxRetries; i++ {
 		serverAddress = c.GetLeader(ctx)
 		if serverAddress == "" {
 			return fmt.Errorf("server address not found")
-		}
-
-		cmd := &cluster.Command{
-			Type:  cluster.CommandPut,
-			Key:   key,
-			Value: value,
-		}
-
-		var cmdToBytes []byte
-		cmdToBytes, err := json.Marshal(cmd)
-		if err != nil {
-			return err
 		}
 
 		var statusCode int
@@ -240,8 +240,11 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 		serverAddress := c.GetLeader(ctx)
 
 		reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
-		httpRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-		log.Printf("ADDRESS IS %s", serverAddress)
+		httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+		if err != nil {
+			return "", fmt.Errorf("fail to create new HTTP request: %w", err)
+		}
+
 		statusCode, err := func() (int, error) {
 			resp, err := c.httpClient.Do(httpRequest)
 			if err != nil {
@@ -265,11 +268,11 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 				return resp.StatusCode, nil
 			}
 			if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
-				leader := resp.Header.Get("Leader")
-				if leader == "" {
+				leaderUrl := resp.Header.Get("Location")
+				if leaderUrl == "" {
 					return 0, fmt.Errorf("leader not found")
 				}
-				parsedUrl, err := url.Parse(leader)
+				parsedUrl, err := url.Parse(leaderUrl)
 				if err != nil {
 					return 0, fmt.Errorf("fail to parse leader URL: %s", err)
 				}
@@ -295,6 +298,7 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 				if i == c.maxRetries-1 {
 					return "", fmt.Errorf("%s", httpErrorMessages[statusCode])
 				}
+				log.Printf("Attempt %d: Retrying GET request...", i+1)
 				c.leaderAddress.Store("")
 				leaderAddr, err := c.findLeader(ctx)
 				if err == nil {
@@ -343,7 +347,6 @@ func (c *Client) findLeader(ctx context.Context) (string, error) {
 			if resp.StatusCode != http.StatusOK {
 				return "", fmt.Errorf("bad status: %s", resp.Status)
 			}
-
 			if resp.StatusCode == http.StatusOK {
 				body, err := io.ReadAll(resp.Body)
 				if err != nil {

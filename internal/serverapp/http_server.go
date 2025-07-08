@@ -149,8 +149,20 @@ func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, ke
 }
 
 func (s *HTTPServer) handleGetRequest(w http.ResponseWriter, r *http.Request, key string) {
-	value, found := s.kvStore.Get(key)
+	leaderID, isLead := s.getLeaderInfo()
+	if !isLead {
+		if leaderID != "" {
+			http.Redirect(w, r, fmt.Sprintf("http://%s/key/%s", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
+			return
+		} else {
+			http.Error(w, fmt.Sprintf("Internal Server error: %v", http.StatusNotFound), http.StatusNotFound)
+			return
+		}
+	}
+
+	value, found := s.node.GetKVStore().Get(key)
 	if !found {
+		log.Printf("key %s not found in kvStore", key)
 		http.Error(w, "value not found", http.StatusNotFound)
 		return
 	}
@@ -158,6 +170,7 @@ func (s *HTTPServer) handleGetRequest(w http.ResponseWriter, r *http.Request, ke
 	jsonBytes, err := json.Marshal(value)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	_, err = w.Write(jsonBytes)
 	if err != nil {
