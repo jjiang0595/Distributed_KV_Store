@@ -406,4 +406,37 @@ func TestClient_Get_TransientError(t *testing.T) {
 	return
 }
 
-func TestClient_Get_MaxRetries
+func TestClient_Get_MaxRetries(t *testing.T) {
+	test := testSetup(t)
+	defer test.cleanup()
+
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
+	test.waitForLeader(leaderID, checkTicker, exitTicker)
+
+	key := "testKey"
+	value := "testValue"
+	putCtx, putCancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer putCancel()
+	err := test.Client.PUT(putCtx, key, value)
+	if err != nil {
+		t.Fatalf("Error putting key: %v", err)
+	}
+
+	test.MockHTTPRT.SetTransientError(3, http.StatusRequestTimeout, nil)
+	getCtx, getCancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
+	defer getCancel()
+	val, err := test.Client.GET(getCtx, key)
+	if err != nil {
+		if val == "" && strings.Contains(err.Error(), "Request Timeout") {
+			t.Logf("Success: Graceful handling of maximum number of retries.")
+			return
+		}
+	}
+	t.Fatalf("Error: Invalid error while injecting maximum number of errors")
+}
+
