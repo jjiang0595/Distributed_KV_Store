@@ -89,7 +89,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	node := cluster.NewNode(ctx, cancel, cfg.Node.ID, cfg.Node.Address, port, gRpcPort, cfg.Node.DataDir, peerIDs, clk, cluster.ProdListenerFactory, t)
-	serverAddr := serverapp.NewHTTPServer(node.ID, node.GetKVStore(), node.ProposeCommand, node.GetLeaderInfo, peerHttpAddresses, port)
+	serverAddr := serverapp.NewHTTPServer(node, node.ProposeCommand, node.GetLeaderInfo, peerHttpAddresses, port)
 	node.Start()
 
 	sigChan := make(chan os.Signal, 1)
