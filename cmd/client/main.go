@@ -15,15 +15,15 @@ import (
 
 type Config struct {
 	Node struct {
-		ID       string `yaml:"id"`
-		Address  string `yaml:"address"`
-		Port     string `yaml:"port"`
-		GrpcPort string `yaml:"grpc_port"`
-		DataDir  string `yaml:"data_dir"`
-	} `yaml:"node"`
+		ID       string `mapstructure:"id" yaml:"id"`
+		Address  string `mapstructure:"address" yaml:"address"`
+		Port     string `mapstructure:"port" yaml:"port"`
+		GrpcPort string `mapstructure:"grpc_port" yaml:"grpc_port"`
+		DataDir  string `mapstructure:"data_dir" yaml:"data_dir"`
+	} `mapstructure:"node" yaml:"node"`
 	Cluster struct {
-		Peers []*cluster.Node `yaml:"peers"`
-	} `yaml:"cluster"`
+		Peers []*cluster.Node `mapstructure:"peers" yaml:"peers"`
+	} `mapstructure:"cluster" yaml:"cluster"`
 }
 
 func LoadConfig(path string) (*Config, error) {

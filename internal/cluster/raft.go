@@ -27,11 +27,11 @@ const (
 )
 
 type Node struct {
-	ID       string `yaml:"id"`
-	Address  string `yaml:"address"`
-	Port     int    `yaml:"port"`
-	GrpcPort int    `yaml:"grpc_port"`
-	dataDir  string `yaml:"data_dir"`
+	ID       string `mapstructure:"id" yaml:"id"`
+	Address  string `mapstructure:"address" yaml:"address"`
+	Port     int    `mapstructure:"port" yaml:"port"`
+	GrpcPort int    `mapstructure:"grpc_port" yaml:"grpc_port"`
+	dataDir  string `mapstructure:"data_dir" yaml:"data_dir"`
 
 	// Raft
 	raftMu sync.Mutex

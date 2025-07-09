@@ -7,66 +7,60 @@ import (
 	"flag"
 	"fmt"
 	"github.com/jonboulle/clockwork"
-	"gopkg.in/yaml.v3"
-	"io"
+	"github.com/spf13/viper"
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
+	"strings"
 	"syscall"
 )
 
 type Config struct {
 	Node struct {
-		ID       string `yaml:"id"`
-		Address  string `yaml:"address"`
-		Port     string `yaml:"port"`
-		GrpcPort string `yaml:"grpc_port"`
-		DataDir  string `yaml:"data_dir"`
-	} `yaml:"node"`
+		ID       string `mapstructure:"id" yaml:"id"`
+		Address  string `mapstructure:"address" yaml:"address"`
+		Port     int    `mapstructure:"port" yaml:"port"`
+		GrpcPort int    `mapstructure:"grpc_port" yaml:"grpc_port"`
+		DataDir  string `mapstructure:"data_dir" yaml:"data_dir"`
+	} `mapstructure:"node" yaml:"node"`
 	Cluster struct {
-		Peers []*cluster.Node `yaml:"peers"`
-	} `yaml:"cluster"`
+		Peers []*cluster.Node `mapstructure:"peers" yaml:"peers"`
+	} `mapstructure:"cluster" yaml:"cluster"`
 }
 
-func LoadConfig(path string) (*Config, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+func LoadConfig(configName string) (*Config, error) {
+	v := viper.New()
 
-	yamlFile, err := io.ReadAll(f)
-	if err != nil {
-		return nil, err
+	v.SetConfigFile(configName)
+	v.SetConfigType("yaml")
+
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("error reading config file, %s", err)
 	}
+
+	v.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
 	var config Config
-	err = yaml.Unmarshal(yamlFile, &config)
-	if err != nil {
+	if err := v.Unmarshal(&config); err != nil {
 		return nil, err
 	}
-
 	return &config, nil
 }
 
 func main() {
-	configFile := flag.String("config", "config-node1.yaml", "Path to config file")
+	configFile := flag.String("config", "config-node1.yaml", "Config file name")
 	flag.Parse()
+
 	fmt.Printf("Starting server with configuration file: %s\n", *configFile)
 
 	cfg, err := LoadConfig(*configFile)
 	if err != nil {
 		log.Fatal(err)
 	}
-	port, err := strconv.Atoi(cfg.Node.Port)
-	if err != nil {
-		log.Fatal(err)
-	}
-	gRpcPort, err := strconv.Atoi(cfg.Node.GrpcPort)
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	port := cfg.Node.Port
+	gRpcPort := cfg.Node.GrpcPort
+	log.Printf("port: %v\n", cfg.Node.DataDir)
 	peerHttpAddresses := make(map[string]string)
 	peerAddresses := make(map[string]string)
 	peerIDs := make([]string, 0)
@@ -76,9 +70,10 @@ func main() {
 			continue
 		}
 		peerIDs = append(peerIDs, peer.ID)
+		log.Printf("%v", cfg.Cluster.Peers[0])
 		peerAddresses[peer.ID] = fmt.Sprintf("%s:%d", peer.Address, peer.GrpcPort)
 	}
-
+	log.Printf("Peer http addresses: %v", peerAddresses)
 	t, err := cluster.NewGRPCTransport(peerAddresses)
 	if err != nil {
 		log.Fatalf("Failed to create grpc transport: %s", err)
