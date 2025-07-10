@@ -12,7 +12,15 @@ import (
 	"time"
 )
 
-func testSetup(t *testing.T) (map[string]*Node, map[string]*KVStore, *MockNetworkTransport, *clockwork.FakeClock) {
+type TestCluster struct {
+	T             *testing.T
+	Clock         *clockwork.FakeClock
+	TestNodes     map[string]*Node
+	KvStores      map[string]*KVStore
+	MockTransport *MockNetworkTransport
+}
+
+func testSetup(t *testing.T) *TestCluster {
 	clk := clockwork.NewFakeClock()
 	mockTransport := NewMockNetworkTransport(context.Background())
 	kvStores := make(map[string]*KVStore)
@@ -49,15 +57,25 @@ func testSetup(t *testing.T) (map[string]*Node, map[string]*KVStore, *MockNetwor
 	}
 
 	testNodesWg.Wait()
-	return testNodes, kvStores, mockTransport, clk
+
+	go func() {
+		for {
+			clk.Advance(1 * time.Microsecond)
+			runtime.Gosched()
+		}
+	}()
+
+	return &TestCluster{T: t, Clock: clk, TestNodes: testNodes, KvStores: kvStores, MockTransport: mockTransport}
 }
 
-func cleanup(t *testing.T, testNodes map[string]*Node) {
-	t.Cleanup(func() {
-		for _, node := range testNodes {
+func (test *TestCluster) cleanup() {
+	test.T.Cleanup(func() {
+		for _, node := range test.TestNodes {
 			go node.Shutdown()
 		}
-		for _, node := range testNodes {
+		for nodeID, node := range test.TestNodes {
+			test.KvStores[nodeID] = nil
+			test.MockTransport.UnregisterRPCServer(node)
 			node.WaitAllGoroutines()
 		}
 	})
@@ -83,7 +101,7 @@ func compareLogs(log1 *LogEntry, log2 *LogEntry) bool {
 	return true
 }
 
-func findLeader(t *testing.T, clk *clockwork.FakeClock, testNodes map[string]*Node, checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) string {
+func (test *TestCluster) findLeader(testNodes map[string]*Node, checkTicker clockwork.Ticker, exitTicker clockwork.Ticker) string {
 	leaderFound := false
 	leaderID := ""
 
@@ -100,7 +118,7 @@ LeaderCheck:
 			}
 
 		case <-exitTicker.Chan():
-			for _, node := range testNodes {
+			for _, node := range test.TestNodes {
 				if node.GetState() == Leader {
 					leaderFound = true
 				}
@@ -108,18 +126,22 @@ LeaderCheck:
 			break LeaderCheck
 
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
 	if !leaderFound {
-		t.Fatalf("Error: Leader not found within time limit")
+		test.T.Fatalf("Error: Leader not found within time limit")
 	}
 	return leaderID
 }
 
-func crashAndRecoverNode(followerID string, testNodes map[string]*Node, kvStores map[string]*KVStore, transport *MockNetworkTransport, clk *clockwork.FakeClock) {
+func (test *TestCluster) crashAndRecoverNode(followerID string) {
+	testNodes := test.TestNodes
+	transport := test.MockTransport
+	kvStores := test.KvStores
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	deletedNode := testNodes[followerID]
@@ -135,9 +157,9 @@ func crashAndRecoverNode(followerID string, testNodes map[string]*Node, kvStores
 		deletedNode.Address,
 		deletedNode.Port,
 		deletedNode.GrpcPort,
-		deletedNode.dataDir,
+		deletedNode.DataDir,
 		deletedNode.peers,
-		clk,
+		test.Clock,
 		deletedNode.listenerFactory,
 		transport,
 	)
@@ -146,19 +168,22 @@ func crashAndRecoverNode(followerID string, testNodes map[string]*Node, kvStores
 	testNodes[followerID].Start()
 }
 
-func crashNode(followerID string, testNodes map[string]*Node, kvStores map[string]*KVStore, transport *MockNetworkTransport) *Node {
+func (test *TestCluster) crashNode(followerID string) *Node {
+	testNodes := test.TestNodes
+
 	deletedNode := testNodes[followerID]
 	testNodes[followerID].cancel()
 	go testNodes[followerID].Shutdown()
-	transport.UnregisterRPCServer(deletedNode)
+	test.MockTransport.UnregisterRPCServer(deletedNode)
 	deletedNode.WaitAllGoroutines()
-	delete(kvStores, followerID)
+	delete(test.KvStores, followerID)
 
 	return deletedNode
 }
 
-func recoverNode(deletedNode *Node, followerID string, testNodes map[string]*Node, kvStores map[string]*KVStore, transport *MockNetworkTransport, clk *clockwork.FakeClock) *Node {
+func (test *TestCluster) recoverNode(deletedNode *Node, followerID string) *Node {
 	ctx, cancel := context.WithCancel(context.Background())
+	testNodes := test.TestNodes
 
 	testNodes[followerID] = NewNode(
 		ctx,
@@ -167,14 +192,14 @@ func recoverNode(deletedNode *Node, followerID string, testNodes map[string]*Nod
 		deletedNode.Address,
 		deletedNode.Port,
 		deletedNode.GrpcPort,
-		deletedNode.dataDir,
+		deletedNode.DataDir,
 		deletedNode.peers,
-		clk,
+		test.Clock,
 		deletedNode.listenerFactory,
-		transport,
+		test.MockTransport,
 	)
-	transport.RegisterRPCServer(testNodes[followerID], testNodes[followerID].raftServer)
-	kvStores[followerID] = testNodes[followerID].kvStore
+	test.MockTransport.RegisterRPCServer(testNodes[followerID], testNodes[followerID].raftServer)
+	test.KvStores[followerID] = testNodes[followerID].kvStore
 	testNodes[followerID].Start()
 
 	return testNodes[followerID]

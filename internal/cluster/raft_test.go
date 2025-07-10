@@ -41,16 +41,18 @@ func TestMain(m *testing.M) {
 func TestLeaderElection_FindLeader(t *testing.T) {
 	t.Parallel()
 
-	testNodes, _, _, clk := testSetup(t)
-	exitTicker := clk.NewTicker(500 * time.Millisecond)
-	checkTicker := clk.NewTicker(25 * time.Millisecond)
+	test := testSetup(t)
+	defer test.cleanup()
+
+	exitTicker := test.Clock.NewTicker(500 * time.Millisecond)
+	checkTicker := test.Clock.NewTicker(25 * time.Millisecond)
 
 	leaderFound := false
 LeaderCheck:
 	for {
 		select {
 		case <-checkTicker.Chan():
-			for _, node := range testNodes {
+			for _, node := range test.TestNodes {
 				if node.GetState() == Leader {
 					leaderFound = true
 					break LeaderCheck
@@ -58,7 +60,7 @@ LeaderCheck:
 			}
 
 		case <-exitTicker.Chan():
-			for _, node := range testNodes {
+			for _, node := range test.TestNodes {
 				if node.GetState() == Leader {
 					leaderFound = true
 				}
@@ -66,29 +68,26 @@ LeaderCheck:
 			break LeaderCheck
 
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
-	if leaderFound {
-		t.Logf("Success: Single Leader")
-	} else {
+	if !leaderFound {
 		t.Fatalf("Error: Leader not found within 500 ms")
 	}
-
-	cleanup(t, testNodes)
-
 }
 
 func TestLeaderElection_LeaderStability(t *testing.T) {
 	t.Parallel()
 
-	testNodes, _, _, clk := testSetup(t)
-	exitTicker := clk.NewTicker(500 * time.Millisecond)
-	checkTicker := clk.NewTicker(25 * time.Millisecond)
+	test := testSetup(t)
+	defer test.cleanup()
 
-	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+	exitTicker := test.Clock.NewTicker(500 * time.Millisecond)
+	checkTicker := test.Clock.NewTicker(25 * time.Millisecond)
+
+	leaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
 	leaderFound := false
 	checkTicker.Reset(25 * time.Millisecond)
@@ -100,7 +99,7 @@ CorrectLeaderCheck:
 		select {
 		case <-checkTicker.Chan():
 			leaderFound = false
-			for _, node := range testNodes {
+			for _, node := range test.TestNodes {
 				if node.GetState() == Leader {
 					if leaderID == node.ID {
 						leaderFound = true
@@ -116,79 +115,73 @@ CorrectLeaderCheck:
 		case <-exitTicker.Chan():
 			break CorrectLeaderCheck
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
-
-	t.Logf("Success: Leader is stable")
-	cleanup(t, testNodes)
 }
 
 func TestLeaderElection_SplitVote(t *testing.T) {
 	t.Parallel()
 
-	testNodes, _, _, clk := testSetup(t)
-	for _, node := range testNodes {
+	test := testSetup(t)
+	defer test.cleanup()
+	for _, node := range test.TestNodes {
 		select {
 		case node.electionTimeoutCh <- struct{}{}:
 		default:
 		}
 	}
 
-	exitTicker := clk.NewTicker(10 * time.Second)
-	checkTicker := clk.NewTicker(20 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
+	checkTicker := test.Clock.NewTicker(20 * time.Millisecond)
 
-	findLeader(t, clk, testNodes, checkTicker, exitTicker)
-
-	cleanup(t, testNodes)
+	test.findLeader(test.TestNodes, checkTicker, exitTicker)
 }
 
 func TestLeaderElection_LeaderCrashRecovery(t *testing.T) {
 	t.Parallel()
 
-	testNodes, _, _, clk := testSetup(t)
+	test := testSetup(t)
+	defer test.cleanup()
 	newCtx, newCancel := context.WithCancel(context.Background())
 	defer newCancel()
 
-	checkTicker := clk.NewTicker(50 * time.Millisecond)
-	exitTicker := clk.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(2 * time.Second)
 
 CrashLeader:
 	for {
 		select {
 		case <-checkTicker.Chan():
-			for _, node := range testNodes {
+			for _, node := range test.TestNodes {
 				if node.GetState() == Leader {
-					crashedNode := testNodes[node.ID]
-					delete(testNodes, node.ID)
+					crashedNode := test.TestNodes[node.ID]
+					delete(test.TestNodes, node.ID)
 					node.cancel()
 					go node.Shutdown()
 					node.WaitAllGoroutines()
 					runtime.Gosched()
 					mockTransport := NewMockNetworkTransport(newCtx)
-					testNodes[node.ID] = NewNode(newCtx, newCancel, crashedNode.ID, crashedNode.Address, crashedNode.Port, crashedNode.GrpcPort, crashedNode.dataDir, crashedNode.peers, crashedNode.Clock, MockListenerFactory, mockTransport)
-					testNodes[node.ID].Start()
+					test.TestNodes[node.ID] = NewNode(newCtx, newCancel, crashedNode.ID, crashedNode.Address, crashedNode.Port, crashedNode.GrpcPort, crashedNode.DataDir, crashedNode.peers, crashedNode.Clock, MockListenerFactory, mockTransport)
+					test.TestNodes[node.ID].Start()
 					break CrashLeader
 				}
 			}
 		case <-exitTicker.Chan():
-			log.Fatalf("Error: Leader not found within 2 seconds")
+			t.Fatalf("Error: Leader not found within 2 seconds")
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
-	clk.Advance(300 * time.Millisecond)
+	test.Clock.Advance(300 * time.Millisecond)
 	runtime.Gosched()
 	checkTicker.Reset(50 * time.Millisecond)
 	exitTicker.Reset(5 * time.Second)
 
-	findLeader(t, clk, testNodes, checkTicker, exitTicker)
-
-	t.Logf("Success: Leader recovered after crash")
-	cleanup(t, testNodes)
+	test.findLeader(test.TestNodes, checkTicker, exitTicker)
 }
 
 func TestLogReplication_LeaderCommand(t *testing.T) {
@@ -200,26 +193,28 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 		Value: "testValue",
 	}
 
-	testNodes, _, _, clk := testSetup(t)
-	exitTicker := clk.NewTicker(10 * time.Second)
-	checkTicker := clk.NewTicker(50 * time.Millisecond)
+	test := testSetup(t)
+	defer test.cleanup()
+
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	defer checkTicker.Stop()
 
-	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+	leaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
 	cmdToBytes, err := json.Marshal(testCmd)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	err = test.TestNodes[leaderID].ProposeCommand(cmdToBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	checkTicker.Reset(100 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-	replicationTicker := clk.NewTicker(50 * time.Millisecond)
+	replicationTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	defer replicationTicker.Stop()
 
 	var replicated bool
@@ -228,7 +223,7 @@ ReplicationCheck:
 		select {
 		case <-replicationTicker.Chan():
 			replicated = true
-			for _, node := range testNodes {
+			for _, node := range test.TestNodes {
 				node.kvStore.mu.Lock()
 				if value, ok := node.kvStore.store[testCmd.Key]; !ok || value != testCmd.Value {
 					replicated = false
@@ -243,29 +238,26 @@ ReplicationCheck:
 		case <-exitTicker.Chan():
 			t.Fatalf("Logs not replicated within 10 secs")
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
-	if replicated {
-		t.Logf("Success: Replicated leader command")
-	} else {
+	if !replicated {
 		t.Fatalf("Error: Replicated leader command not replicated to all nodes. Replicated to %v nodes.", replicated)
 	}
-
-	cleanup(t, testNodes)
 }
 
 func TestLogReplication_FollowerCrashAndRecovery(t *testing.T) {
 	t.Parallel()
 
-	testNodes, kvStores, transport, clk := testSetup(t)
+	test := testSetup(t)
+	defer test.cleanup()
 
 	leaderID := ""
 	followerID := ""
-	exitTicker := clk.NewTicker(10 * time.Second)
-	checkTicker := clk.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	defer checkTicker.Stop()
 
 LeaderFollowerSetup:
@@ -274,7 +266,7 @@ LeaderFollowerSetup:
 		case <-exitTicker.Chan():
 			t.Fatalf("Leader not found within 10 secs")
 		case <-checkTicker.Chan():
-			for _, node := range testNodes {
+			for _, node := range test.TestNodes {
 				if node.GetState() == Leader {
 					leaderID = node.ID
 					if followerID != "" {
@@ -285,7 +277,7 @@ LeaderFollowerSetup:
 				}
 			}
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
@@ -301,7 +293,7 @@ LeaderFollowerSetup:
 		t.Fatal(err)
 	}
 
-	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	err = test.TestNodes[leaderID].ProposeCommand(cmdToBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,26 +304,25 @@ LeaderCheck:
 	for {
 		select {
 		case <-checkTicker.Chan():
-			if len(testNodes[followerID].kvStore.GetData()) == 1 {
-				//log.Printf("FOLLOWER %v: LOG %v", followerID, testNodes[followerID].GetLog())
+			if len(test.TestNodes[followerID].kvStore.GetData()) == 1 {
 				break LeaderCheck
 			}
 		case <-exitTicker.Chan():
 			t.Fatalf("Leader not found within 5 secs")
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
-	deletedNode := testNodes[followerID]
-	crashAndRecoverNode(followerID, testNodes, kvStores, transport, clk)
+	deletedNode := test.TestNodes[followerID]
+	test.crashAndRecoverNode(followerID)
 
 	exitTicker.Reset(5 * time.Second)
 	checkTicker.Reset(50 * time.Millisecond)
 
-	if deletedNode.currentTerm != testNodes[followerID].GetCurrentTerm() || deletedNode.votedFor != testNodes[followerID].GetVotedFor() {
-		log.Fatal("Error: Current Term Or Voted For Mismatch")
+	if deletedNode.currentTerm != test.TestNodes[followerID].GetCurrentTerm() || deletedNode.votedFor != test.TestNodes[followerID].GetVotedFor() {
+		t.Fatal("Error: Current Term Or Voted For Mismatch")
 	}
 
 	var recovered bool
@@ -341,18 +332,18 @@ FollowerRecoveryCheck:
 		case <-checkTicker.Chan():
 			recovered = true
 
-			followerCommitIndex := testNodes[followerID].GetCommitIndex()
-			followerData := testNodes[followerID].kvStore.GetData()
+			followerCommitIndex := test.TestNodes[followerID].GetCommitIndex()
+			followerData := test.TestNodes[followerID].kvStore.GetData()
 
-			leaderCommitIndex := testNodes[leaderID].GetCommitIndex()
-			leaderData := testNodes[leaderID].kvStore.GetData()
+			leaderCommitIndex := test.TestNodes[leaderID].GetCommitIndex()
+			leaderData := test.TestNodes[leaderID].kvStore.GetData()
 
 			if len(leaderData) != len(followerData) || followerCommitIndex != leaderCommitIndex {
 				recovered = false
 				continue
 			}
 			for leaderKey, leaderValue := range leaderData {
-				if value, ok := testNodes[followerID].kvStore.Get(leaderKey); !ok || value != leaderValue {
+				if value, ok := test.TestNodes[followerID].kvStore.Get(leaderKey); !ok || value != leaderValue {
 					recovered = false
 					break
 				}
@@ -365,7 +356,7 @@ FollowerRecoveryCheck:
 			recovered = false
 			break FollowerRecoveryCheck
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
@@ -373,22 +364,21 @@ FollowerRecoveryCheck:
 	if !recovered {
 		t.Fatalf("Error: Follower not recovered")
 	}
-
-	t.Logf("Success: Recovered follower command")
-	cleanup(t, testNodes)
 }
 
 func TestLogReplication_LogDivergence(t *testing.T) {
 	t.Parallel()
-	testNodes, _, transport, clk := testSetup(t)
-	checkTicker := clk.NewTicker(25 * time.Millisecond)
-	exitTicker := clk.NewTicker(500 * time.Millisecond)
+	test := testSetup(t)
+	defer test.cleanup()
 
-	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+	checkTicker := test.Clock.NewTicker(25 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(500 * time.Millisecond)
+
+	leaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 	var followerID string
 	var followerNode *Node
 
-	for _, node := range testNodes {
+	for _, node := range test.TestNodes {
 		if node.GetState() == Follower {
 			followerID = node.ID
 			followerNode = node
@@ -396,7 +386,7 @@ func TestLogReplication_LogDivergence(t *testing.T) {
 		}
 	}
 
-	leaderNode := testNodes[leaderID]
+	leaderNode := test.TestNodes[leaderID]
 	testCmdA := &Command{
 		Type:  CommandPut,
 		Key:   "key_A",
@@ -408,7 +398,7 @@ func TestLogReplication_LogDivergence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	err = test.TestNodes[leaderID].ProposeCommand(cmdToBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +414,7 @@ func TestLogReplication_LogDivergence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	err = test.TestNodes[leaderID].ProposeCommand(cmdToBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,17 +430,17 @@ LogReplicationCheck:
 			}
 
 		case <-exitTicker.Chan():
-			log.Fatalf("Error: Logs not replicated within time limit")
+			t.Fatalf("Error: Logs not replicated within time limit")
 
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
-	for _, peerID := range testNodes[followerID].peers {
-		transport.SetPartition(followerID, peerID, true)
-		transport.SetPartition(peerID, followerID, true)
+	for _, peerID := range test.TestNodes[followerID].peers {
+		test.MockTransport.SetPartition(followerID, peerID, true)
+		test.MockTransport.SetPartition(peerID, followerID, true)
 	}
 
 	logEntryC := &LogEntry{
@@ -482,9 +472,9 @@ LogReplicationCheck:
 	followerNode.log = append(followerNode.log, logEntryD)
 	followerNode.raftMu.Unlock()
 
-	for _, peerID := range testNodes[followerID].peers {
-		transport.SetPartition(followerID, peerID, false)
-		transport.SetPartition(peerID, followerID, false)
+	for _, peerID := range test.TestNodes[followerID].peers {
+		test.MockTransport.SetPartition(followerID, peerID, false)
+		test.MockTransport.SetPartition(peerID, followerID, false)
 	}
 
 	testCmdE := &Command{
@@ -497,13 +487,13 @@ LogReplicationCheck:
 		return
 	}
 
-	err = testNodes[followerID].ProposeCommand(marshalledCommandE)
+	err = test.TestNodes[followerID].ProposeCommand(marshalledCommandE)
 	if err != nil {
 		return
 	}
 
 	for i := 0; i < 5; i++ {
-		clk.Advance(50 * time.Millisecond)
+		test.Clock.Advance(50 * time.Millisecond)
 		runtime.Gosched()
 	}
 
@@ -545,7 +535,7 @@ ConflictingLogsCheck:
 			break ConflictingLogsCheck
 
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
@@ -553,25 +543,23 @@ ConflictingLogsCheck:
 	if !resolved {
 		t.Fatalf("Error: Follower's diverging log not resolved")
 	}
-
-	t.Logf("Success: Resolved diverging log entries")
-	cleanup(t, testNodes)
 }
 
 func TestNodePartition_LeaderPartition(t *testing.T) {
 	t.Parallel()
-	testNodes, _, transport, clk := testSetup(t)
-	exitTicker := clk.NewTicker(500 * time.Millisecond)
-	checkTicker := clk.NewTicker(25 * time.Millisecond)
+	test := testSetup(t)
+	defer test.cleanup()
 
-	oldLeaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(1 * time.Second)
+	oldLeaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
-	for _, peerID := range testNodes[oldLeaderID].peers {
-		transport.SetPartition(oldLeaderID, peerID, true)
+	for _, peerID := range test.TestNodes[oldLeaderID].peers {
+		test.MockTransport.SetPartition(oldLeaderID, peerID, true)
 	}
 
 	majorityNodes := make(map[string]*Node)
-	for _, node := range testNodes {
+	for _, node := range test.TestNodes {
 		if node.ID != oldLeaderID {
 			majorityNodes[node.ID] = node
 		}
@@ -579,10 +567,10 @@ func TestNodePartition_LeaderPartition(t *testing.T) {
 
 	checkTicker.Reset(50 * time.Millisecond)
 	exitTicker.Reset(1 * time.Second)
-	newLeaderID := findLeader(t, clk, majorityNodes, checkTicker, exitTicker)
+	newLeaderID := test.findLeader(majorityNodes, checkTicker, exitTicker)
 
-	for _, peerID := range testNodes[oldLeaderID].peers {
-		transport.SetPartition(oldLeaderID, peerID, false)
+	for _, peerID := range test.TestNodes[oldLeaderID].peers {
+		test.MockTransport.SetPartition(oldLeaderID, peerID, false)
 	}
 
 	exitTicker.Reset(5 * time.Second)
@@ -593,20 +581,19 @@ ReintroduceOldLeader:
 	for {
 		select {
 		case <-checkTicker.Chan():
-			if testNodes[newLeaderID].GetState() == Leader && testNodes[oldLeaderID].GetState() == Follower {
+			if test.TestNodes[newLeaderID].GetState() == Leader && test.TestNodes[oldLeaderID].GetState() == Follower {
 				stepDown = true
 				break ReintroduceOldLeader
 			}
 
 		case <-exitTicker.Chan():
-			if testNodes[newLeaderID].GetState() == Leader && testNodes[oldLeaderID].GetState() == Follower {
+			if test.TestNodes[newLeaderID].GetState() == Leader && test.TestNodes[oldLeaderID].GetState() == Follower {
 				stepDown = true
-				break ReintroduceOldLeader
 			}
 			break ReintroduceOldLeader
 
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
@@ -615,18 +602,27 @@ ReintroduceOldLeader:
 		t.Fatalf("Error: Old leader didn't step down.")
 	}
 
-	t.Logf("Success: Old leader step down")
-	cleanup(t, testNodes)
+	t.Cleanup(func() {
+		for _, node := range majorityNodes {
+			go node.Shutdown()
+		}
+		for nodeID, node := range majorityNodes {
+			test.KvStores[nodeID] = nil
+			test.MockTransport.UnregisterRPCServer(node)
+			node.WaitAllGoroutines()
+		}
+	})
 }
 
 func TestNodesCrash_CrashAndRecovery(t *testing.T) {
 	t.Parallel()
-	testNodes, kvStore, transport, clk := testSetup(t)
+	test := testSetup(t)
+	defer test.cleanup()
 
-	exitTicker := clk.NewTicker(500 * time.Millisecond)
-	checkTicker := clk.NewTicker(25 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(500 * time.Millisecond)
+	checkTicker := test.Clock.NewTicker(25 * time.Millisecond)
 
-	leaderID := findLeader(t, clk, testNodes, checkTicker, exitTicker)
+	leaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
 	testCmdA := &Command{
 		Type:  CommandPut,
@@ -639,7 +635,7 @@ func TestNodesCrash_CrashAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	err = test.TestNodes[leaderID].ProposeCommand(cmdToBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +651,7 @@ func TestNodesCrash_CrashAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = testNodes[leaderID].ProposeCommand(cmdToBytes)
+	err = test.TestNodes[leaderID].ProposeCommand(cmdToBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,45 +665,39 @@ DataPersistedCheck:
 		select {
 		case <-checkTicker.Chan():
 			persisted = true
-			for nodeID, _ := range testNodes {
+			for nodeID, _ := range test.TestNodes {
 				if nodeID == leaderID {
 					continue
 				}
-				log.Printf("follower: %v, leader: %v", len(kvStore[nodeID].GetData()), len(kvStore[leaderID].GetData()))
-				if len(kvStore[nodeID].GetData()) == 2 {
+				if len(test.KvStores[nodeID].GetData()) == 2 {
 					persisted = false
 					break
 				}
 			}
 			if persisted {
-				log.Printf("PERSISTED")
 				break DataPersistedCheck
 			}
 		case <-exitTicker.Chan():
-			log.Fatalf("Error: Timed out waiting for persisted data")
+			t.Fatalf("Error: Timed out waiting for persisted data")
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
 
-	clk.Advance(50 * time.Millisecond)
-	runtime.Gosched()
-
 	crashedTestNodes := make(map[string]*Node)
-	for nodeID := range testNodes {
-		deletedNode := crashNode(nodeID, testNodes, kvStore, transport)
+	for nodeID := range test.TestNodes {
+		deletedNode := test.crashNode(nodeID)
 		crashedTestNodes[nodeID] = deletedNode
-		log.Printf("AAAA %v", crashedTestNodes[nodeID].kvStore.GetData())
 	}
 
-	for nodeID := range testNodes {
-		recoverNode(crashedTestNodes[nodeID], nodeID, testNodes, kvStore, transport, clk)
+	for nodeID := range test.TestNodes {
+		test.recoverNode(test.TestNodes[nodeID], nodeID)
 	}
 
 	checkTicker.Reset(100 * time.Millisecond)
 	exitTicker.Reset(2 * time.Second)
-	findLeader(t, clk, crashedTestNodes, checkTicker, exitTicker)
+	test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
 	var recovered bool
 RecoveredCheck:
@@ -715,9 +705,9 @@ RecoveredCheck:
 		select {
 		case <-checkTicker.Chan():
 			recovered = false
-			for nodeID, _ := range crashedTestNodes {
-				for key, oldVal := range crashedTestNodes[nodeID].kvStore.GetData() {
-					if newVal, ok := testNodes[nodeID].kvStore.Get(key); ok && oldVal == newVal {
+			for nodeID, crashedNode := range crashedTestNodes {
+				for key, oldVal := range crashedNode.kvStore.GetData() {
+					if newVal, ok := crashedTestNodes[nodeID].kvStore.Get(key); ok && oldVal == newVal {
 						recovered = true
 					}
 				}
@@ -730,7 +720,7 @@ RecoveredCheck:
 			break RecoveredCheck
 
 		default:
-			clk.Advance(1 * time.Microsecond)
+			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
 		}
 	}
@@ -738,5 +728,4 @@ RecoveredCheck:
 	if !recovered {
 		t.Fatalf("Error: New nodes' data not consistent with old nodes' data")
 	}
-	cleanup(t, testNodes)
 }
