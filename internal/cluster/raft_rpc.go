@@ -23,6 +23,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		s.mainNode.currentTerm = req.Term
 		s.mainNode.state = Follower
 		s.mainNode.votesReceived = make(map[string]bool)
+		s.mainNode.StopReplicators()
 		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 	}
 
@@ -39,6 +40,7 @@ func (s *RaftServer) ProcessAppendEntriesRequest(ctx context.Context, req *Appen
 		s.mainNode.votedFor = ""
 		s.mainNode.votesReceived = make(map[string]bool)
 		s.mainNode.state = Follower
+		s.mainNode.StopReplicators()
 		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 	}
 
@@ -105,6 +107,7 @@ func (s *RaftServer) ProcessVoteRequest(ctx context.Context, req *RequestVoteReq
 		s.mainNode.currentTerm = req.Term
 		s.mainNode.state = Follower
 		s.mainNode.votesReceived = make(map[string]bool)
+		s.mainNode.StopReplicators()
 		s.mainNode.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 	}
 	select {
@@ -151,6 +154,7 @@ func (s *RaftServer) ReceiveVote(req *RequestVoteResponse) {
 		s.mainNode.votedFor = ""
 		s.mainNode.currentTerm = voterTerm
 		s.mainNode.state = Follower
+		s.mainNode.StopReplicators()
 		s.mainNode.votesReceived = make(map[string]bool)
 		select {
 		case s.mainNode.resetElectionTimeoutChan <- struct{}{}:
