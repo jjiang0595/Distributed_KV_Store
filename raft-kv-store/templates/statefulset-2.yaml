@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: raft-cluster-2
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{ include "raft-kv-store.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ .Values.service.headlessName | default (include "raft-kv-store.fullname" .) }}
+  selector:
+    matchLabels:
+      {{ include "raft-kv-store.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{ include "raft-kv-store.selectorLabels" . | nindent 8 }}
+    spec:
+      imagePullSecrets:
+        - name: {{ .Values.node.imagePullSecret }}
+      securityContext:
+        runAsUser: 0
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "raft-kv-store.fullname" . }}
+            items:
+              - key: config.yaml
+                path: config.yaml
+        - name: raft-storage
+          persistentVolumeClaim:
+            claimName: raft-data-raft-cluster-2
+      containers:
+        - name: raft-node
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: 500m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 1
+          ports:
+            - containerPort: {{ .Values.node.httpPort }}
+            - containerPort: {{ .Values.node.grpcPort }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config
+              readOnly: True
+            - name: raft-storage
+              mountPath: {{ .Values.node.dataDir }}
+          env:
+            - name: RAFT_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: RAFT_NODE_ADDRESS
+              value: "$(RAFT_NODE_ID).{{ .Values.service.headlessName }}"
+            - name: RAFT_NODE_HTTP_PORT
+              value: "{{ .Values.node.httpPort }}"
+            - name: RAFT_NODE_GRPC_PORT
+              value: "{{ .Values.node.grpcPort }}"
+            - name: RAFT_NODE_DATA_DIR
+              value: "{{ .Values.node.dataDir }}"
+          command: [ "/app/server" ]
+          args:
+            - --config=/etc/config/config.yaml
