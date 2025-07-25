@@ -48,6 +48,7 @@ func NewHTTPServer(node *cluster.Node, proposeCmd func(cmd []byte) error, getLea
 	}
 	mux.HandleFunc("/key/", s.handleKeyRequest)
 	mux.HandleFunc("/status", s.handleStatusRequest)
+	mux.HandleFunc("/healthz", s.handleLivenessProbe)
 	return s
 }
 
@@ -61,12 +62,17 @@ func (s *HTTPServer) Start() {
 
 func (s *HTTPServer) Stop() {
 	if s.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if err := s.server.Shutdown(ctx); err != nil {
 			log.Printf("%s HTTP Server Shutdown Failed: %v", s.node.ID, err)
 		}
 	}
+}
+
+func (s *HTTPServer) handleLivenessProbe(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
 }
 
 func (s *HTTPServer) handleStatusRequest(w http.ResponseWriter, r *http.Request) {
