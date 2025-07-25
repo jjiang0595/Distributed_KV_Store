@@ -1,6 +1,6 @@
 services:
   node1:
-    image: jjiang0595/raft-node:v1.0.0
+    image: jjiang0595/raft-node:v1.3.2
     ports:
       - "8080:8080"
       - "6000:6000"
@@ -14,7 +14,7 @@ services:
       RAFT_NODE_DATA_DIR: /app/data/node1
     command: ["./server", "--config", "/app/config.yaml"]
   node2:
-    image: jjiang0595/raft-node:v1.0.0
+    image: jjiang0595/raft-node:v1.3.2
     ports:
       - "8081:8081"
       - "6001:6001"
@@ -28,7 +28,7 @@ services:
       RAFT_NODE_DATA_DIR: /app/data/node2
     command: ["./server", "--config", "/app/config.yaml"]
   node3:
-    image: jjiang0595/raft-node:v1.0.0
+    image: jjiang0595/raft-node:v1.3.2
     ports:
       - "8082:8082"
       - "6002:6002"
