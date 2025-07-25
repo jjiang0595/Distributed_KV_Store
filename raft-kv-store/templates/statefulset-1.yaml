@@ -42,21 +42,9 @@ spec:
               cpu: 500m
               memory: 2Gi
           livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 15
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
+            {{ toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 1
+            {{ toYaml .Values.readinessProbe | nindent 12 }}
           ports:
             - containerPort: {{ .Values.node.httpPort }}
             - containerPort: {{ .Values.node.grpcPort }}
