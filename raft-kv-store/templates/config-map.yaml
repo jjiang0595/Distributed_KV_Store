@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "raft-kv-store.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{ include "raft-kv-store.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    node:
+      id: "{{ .Values.service.clientName | default (include "raft-kv-store.fullname" .) }}-0"
+      address: "{{ .Values.service.clientName | default (include "raft-kv-store.fullname" .) }}-0.{{ .Values.service.headlessName }}"
+      http_port: {{ .Values.node.httpPort }}
+      grpc_port: {{ .Values.node.grpcPort }}
+      data_dir: {{ .Values.node.dataDir }}
+    cluster:
+      peers:
+    {{- $statefulSetName := .Values.service.clientName | default (include "raft-kv-store.fullname" .) }}
+    {{- $headlessServiceName := .Values.service.headlessName | default (include "raft-kv-store.fullname" .) }}
+    {{- range $i := until (int 3) }}
+        - id: "{{ $statefulSetName }}-{{ $i }}-0"
+          address: "{{ $statefulSetName }}-{{ $i }}-0.{{ $headlessServiceName }}"
+          http_port: {{ $.Values.node.httpPort }}
+          grpc_port: {{ $.Values.node.grpcPort }}
+          data_dir: {{ $.Values.node.dataDir }}
+    {{- end }}
