@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"time"
 )
 
@@ -27,6 +28,9 @@ func (n *Node) StartReplicators() {
 }
 
 func (n *Node) StopReplicators() {
+	if n.replicatorCancel == nil {
+		return
+	}
 	for _, replicatorCancel := range n.replicatorCancel {
 		replicatorCancel()
 	}
@@ -34,20 +38,9 @@ func (n *Node) StopReplicators() {
 }
 
 func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID string) (bool, error) {
+	logSnapshot := n.GetLog()
 	n.raftMu.Lock()
 	term, leaderID, commitIndex := n.currentTerm, n.leaderID, n.commitIndex
-	logSnapshot := make([]*LogEntry, 0, len(n.log))
-	for _, entry := range n.log {
-		if entry != nil {
-			logEntry := &LogEntry{
-				Term:    entry.Term,
-				Index:   entry.Index,
-				Command: make([]byte, len(entry.Command)),
-			}
-			copy(logEntry.Command, entry.Command)
-			logSnapshot = append(logSnapshot, logEntry)
-		}
-	}
 	peerNextIndex, ok := n.nextIndex[followerID]
 	n.raftMu.Unlock()
 	if !ok {
@@ -78,6 +71,7 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 		entries = logSnapshot[peerNextIndex-1:]
 	}
 	replicateCtx, replicateCancel := context.WithTimeout(stopCtx, 200*time.Millisecond)
+	defer replicateCancel()
 	//log.Printf("Leader %s: ReplicateToFollower sending logs to %v at time %v", leaderID, followerID, n.Clock.Now())
 	response, err := n.Transport.SendAppendEntries(replicateCtx, n.ID, followerID, &AppendEntriesRequest{
 		Term:         term,
@@ -87,7 +81,6 @@ func (n *Node) sendAppendEntriesToPeers(stopCtx context.Context, followerID stri
 		Entries:      entries,
 		LeaderCommit: commitIndex,
 	})
-	replicateCancel()
 	if err != nil {
 		return false, fmt.Errorf("error sending append entries request to follower: %v", err)
 	}
@@ -111,48 +104,69 @@ func (n *Node) replicateToFollower(stopCtx context.Context, followerID string, r
 	defer func() {
 		n.replicatorWg.Done()
 	}()
-	retryTime := time.Millisecond * 10
-	maxRetryTime := time.Second * 2
-	retryTimer := n.Clock.NewTimer(retryTime)
+	followerOnline := true
+
+	baseRetryTime := time.Millisecond * 150
+	currentRetryTime := baseRetryTime
+	maxRetryTime := time.Second * 3
+	retryTimer := n.Clock.NewTimer(baseRetryTime)
 	retryTimer.Stop()
 
-	ticker := n.Clock.NewTicker(100 * time.Millisecond)
+	ticker := n.Clock.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-stopCtx.Done():
+			retryTimer.Stop()
 			log.Printf("Node %s: Replicator goroutine stopped", n.ID)
 			return
+
 		case <-replicatorSendNowChan:
 			log.Printf("Node %s: Immediate retry", n.ID)
-			retryTimer.Stop()
-
 			_, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
 			if err != nil {
-				retryTime = time.Millisecond * 10
-				retryTimer.Reset(retryTime)
+				followerOnline = false
+				ticker.Stop()
+				retryTimer.Reset(50 * time.Millisecond)
+			} else {
+				followerOnline = true
+				ticker.Reset(50 * time.Millisecond)
+				retryTimer.Stop()
+				if !retryTimer.Stop() {
+					<-retryTimer.Chan()
+				}
 			}
 
 		case <-ticker.Chan():
-			_, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
-			if err != nil {
-				ticker.Stop()
-				retryTime = time.Millisecond * 10
-				retryTimer.Reset(retryTime)
+			if followerOnline {
+				_, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
+				if err != nil {
+					followerOnline = false
+					ticker.Stop()
+					retryTimer.Reset(baseRetryTime)
+				} else {
+					followerOnline = true
+				}
 			}
 
 		case <-retryTimer.Chan():
-			_, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
-			if err != nil {
-				retryTime = min(maxRetryTime, retryTime*2)
-				retryTimer.Reset(retryTime)
-			} else {
-				retryTime = time.Millisecond * 10
-				retryTimer.Stop()
-				ticker.Reset(100 * time.Millisecond)
+			if !followerOnline {
+				_, err := n.sendAppendEntriesToPeers(stopCtx, followerID)
+				if err != nil {
+					followerOnline = false
+					currentRetryTime = min(maxRetryTime, (currentRetryTime*2)+time.Duration(rand.Int63n(int64(100*time.Millisecond))))
+					retryTimer.Reset(currentRetryTime)
+				} else {
+					followerOnline = true
+					currentRetryTime = baseRetryTime
+					retryTimer.Stop()
+					ticker.Reset(50 * time.Millisecond)
+					if !retryTimer.Stop() {
+						<-retryTimer.Chan()
+					}
+				}
 			}
-			log.Printf("RETRY TIME: %v", retryTime)
 		}
 	}
 }
