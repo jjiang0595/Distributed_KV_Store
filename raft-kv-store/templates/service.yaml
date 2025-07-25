@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.service.headlessName | default (include "raft-kv-store.fullname" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{ include "raft-kv-store.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{ include "raft-kv-store.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: http
+    port: {{ .Values.node.httpPort }}
+    targetPort: {{ .Values.node.httpPort }}
+  - name: grpc
+    port: {{ .Values.node.grpcPort }}
+    targetPort: {{ .Values.node.grpcPort }}
+  publishNotReadyAddresses: true
+
