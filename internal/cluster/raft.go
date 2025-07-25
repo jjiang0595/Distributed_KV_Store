@@ -22,8 +22,8 @@ const (
 )
 
 const (
-	minElectionTimeoutMs = 150
-	maxElectionTimeoutMs = 300
+	minElectionTimeoutMs = 1500
+	maxElectionTimeoutMs = 2000
 )
 
 type Node struct {
@@ -351,7 +351,7 @@ func (n *Node) RunRaftLoop() {
 						n.nextIndex[wrappedResp.PeerID] = wrappedResp.PrevLogIndex + uint64(len(wrappedResp.SentEntries)) + 1
 					}
 				} else {
-					log.Printf("Node %s: Failed to replicate to follower", n.ID)
+					log.Printf("Node %s: Failed to replicate to follower. Leader Term %d, follower term %d", n.ID, n.currentTerm, grpcResponse.Term)
 					if n.nextIndex[wrappedResp.PeerID] > 1 {
 						n.nextIndex[wrappedResp.PeerID] -= 1
 						select {
@@ -359,11 +359,13 @@ func (n *Node) RunRaftLoop() {
 						default:
 						}
 					}
+					n.raftMu.Unlock()
 					continue
 				}
+				logLength := len(n.log)
 				n.raftMu.Unlock()
 				// Update Leader's Commit Index
-				for i := len(n.GetLog()) - 1; i >= 0; i-- {
+				for i := logLength - 1; i >= 0; i-- {
 					if n.GetCurrentTerm() != n.log[i].GetTerm() {
 						break
 					}
@@ -410,14 +412,14 @@ func (n *Node) RunRaftLoop() {
 				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 				n.raftMu.Unlock()
 
-				for peerID, peerSendCh := range n.replicatorSendNowChan {
-					select {
-					case peerSendCh <- struct{}{}:
-						log.Printf("Leader %s: Signal replicator to send log entry to %v", n.ID, peerID)
-					default:
-						log.Printf("Leader %s: Replicator is blocked while sending to %v.", n.ID, peerID)
-					}
-				}
+				//for peerID, peerSendCh := range n.replicatorSendNowChan {
+				//	select {
+				//	case peerSendCh <- struct{}{}:
+				//		log.Printf("Leader %s: Signal replicator to send log entry to %v", n.ID, peerID)
+				//	default:
+				//		log.Printf("Leader %s: Replicator is blocked while sending to %v.", n.ID, peerID)
+				//	}
+				//}
 			}
 		case Candidate:
 			log.Printf("------------------------Candidate---------------------------------")
@@ -454,11 +456,7 @@ func (n *Node) RunRaftLoop() {
 				n.SendPersistRaftStateRequest(oldTerm, oldVotedFor, oldLogLength)
 				n.raftMu.Unlock()
 
-				for _, peerID := range n.peers {
-					voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*50)
-					n.raftLoopWg.Add(1)
-					go n.sendVoteRequestToPeer(voteCtx, voteCancel, peerID, n.currentTerm, lastLogIndex, lastLogTerm)
-				}
+				go n.sendVoteRequestToPeers(n.currentTerm, lastLogIndex, lastLogTerm)
 
 			case aeWrapper := <-n.appendEntriesChan:
 				log.Printf("Request received in appendEntriesChan")
@@ -644,7 +642,7 @@ func (n *Node) RunRaftLoop() {
 
 func (n *Node) sendVoteRequestToPeers(currentTerm uint64, lastLogIndex uint64, lastLogTerm uint64) {
 	for _, peerID := range n.peers {
-		voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*50)
+		voteCtx, voteCancel := context.WithTimeout(n.ctx, time.Millisecond*200)
 		n.raftLoopWg.Add(1)
 		go n.sendVoteRequestToPeer(voteCtx, voteCancel, peerID, currentTerm, lastLogIndex, lastLogTerm)
 	}
