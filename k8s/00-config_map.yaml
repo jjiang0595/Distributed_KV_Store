@@ -1,0 +1,29 @@
+#apiVersion: v1
+#kind: ConfigMap
+#metadata:
+#  name: raft-config-map
+#data:
+#  config.yaml: |
+#    node:
+#      id: raft-cluster-0
+#      address: raft-cluster-0.raft-service
+#      http_port: 8080
+#      grpc_port: 6000
+#      data_dir: /app/data
+#    cluster:
+#      peers:
+#      - id: raft-cluster-0
+#        address: raft-cluster-0.raft-service
+#        http_port: 8080
+#        grpc_port: 6000
+#        data_dir: /app/data
+#      - id: raft-cluster-1
+#        address: raft-cluster-1.raft-service
+#        http_port: 8080
+#        grpc_port: 6000
+#        data_dir: /app/data
+#      - id: raft-cluster-2
+#        address: raft-cluster-2.raft-service
+#        http_port: 8080
+#        grpc_port: 6000
+#        data_dir: /app/data
