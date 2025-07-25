@@ -42,8 +42,8 @@ func TestClient_Put_LeaderDiscovery(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	test.setupLeader(checkTicker, exitTicker)
 
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 3*time.Second)
@@ -56,8 +56,8 @@ func TestClient_Put_LeaderDiscovery(t *testing.T) {
 		return
 	}
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 
 	var replicated bool
 ReplicationCheck:
@@ -87,11 +87,11 @@ func TestClient_Put_FollowerRedirects(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	followerID, leaderID := test.setupLeader(checkTicker, exitTicker)
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
@@ -107,8 +107,8 @@ func TestClient_Put_FollowerRedirects(t *testing.T) {
 		return
 	}
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	var replicated bool
 ReplicationCheck:
 	for {
@@ -138,13 +138,13 @@ func TestClient_Put_TransientError(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
@@ -159,8 +159,8 @@ func TestClient_Put_TransientError(t *testing.T) {
 		t.Errorf("Error putting key: %v", err)
 		return
 	}
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	var replicated bool
 ReplicationCheck:
 	for {
@@ -189,13 +189,13 @@ func TestClient_Put_MaxRetries(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
@@ -230,13 +230,13 @@ func TestClient_Put_ContextTimeout(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(2 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
@@ -269,8 +269,8 @@ func TestClient_Get_Success(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(1 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
@@ -283,8 +283,8 @@ func TestClient_Get_Success(t *testing.T) {
 		t.Fatalf("Error putting key: %v", err)
 	}
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 
 	var replicated bool
 ReplicationCheck:
@@ -323,12 +323,12 @@ func TestClient_Get_NotFound(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
@@ -353,12 +353,12 @@ func TestClient_Get_LeaderAddressUpdate(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	test.Client.leaderAddress.Store("")
@@ -385,11 +385,11 @@ func TestClient_Get_FollowerRedirect(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	followerID, leaderID := test.setupLeader(checkTicker, exitTicker)
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[followerID])
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
@@ -414,11 +414,11 @@ func TestClient_Get_TransientError(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	testKey := "testKey"
@@ -447,12 +447,12 @@ func TestClient_Get_MaxRetries(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	key := "testKey"
@@ -490,12 +490,12 @@ func TestClient_Get_ContextTimeout(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	key := "testKey"
@@ -536,11 +536,11 @@ func TestClient_Get_NonRetryableError(t *testing.T) {
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	_, leaderID := test.setupLeader(checkTicker, exitTicker)
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	test.waitForLeader(leaderID, checkTicker, exitTicker)
 
 	test.MockHTTPRT.SetTransientError(1, http.StatusNotFound, nil)
