@@ -118,7 +118,7 @@ LeaderCheck:
 			}
 
 		case <-exitTicker.Chan():
-			for _, node := range test.TestNodes {
+			for _, node := range testNodes {
 				if node.GetState() == Leader {
 					leaderFound = true
 				}
@@ -157,7 +157,7 @@ func (test *TestCluster) crashAndRecoverNode(followerID string) {
 		deletedNode.Address,
 		deletedNode.Port,
 		deletedNode.GrpcPort,
-		deletedNode.DataDir,
+		deletedNode.dataDir,
 		deletedNode.peers,
 		test.Clock,
 		deletedNode.listenerFactory,
@@ -192,7 +192,7 @@ func (test *TestCluster) recoverNode(deletedNode *Node, followerID string) *Node
 		deletedNode.Address,
 		deletedNode.Port,
 		deletedNode.GrpcPort,
-		deletedNode.DataDir,
+		deletedNode.dataDir,
 		deletedNode.peers,
 		test.Clock,
 		deletedNode.listenerFactory,

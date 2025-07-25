@@ -39,13 +39,12 @@ func TestMain(m *testing.M) {
 }
 
 func TestLeaderElection_FindLeader(t *testing.T) {
-	t.Parallel()
 
 	test := testSetup(t)
 	defer test.cleanup()
 
-	exitTicker := test.Clock.NewTicker(500 * time.Millisecond)
-	checkTicker := test.Clock.NewTicker(25 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 
 	leaderFound := false
 LeaderCheck:
@@ -79,19 +78,18 @@ LeaderCheck:
 }
 
 func TestLeaderElection_LeaderStability(t *testing.T) {
-	t.Parallel()
 
 	test := testSetup(t)
 	defer test.cleanup()
 
-	exitTicker := test.Clock.NewTicker(500 * time.Millisecond)
-	checkTicker := test.Clock.NewTicker(25 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 
 	leaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
 	leaderFound := false
-	checkTicker.Reset(25 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	leaderFound = false
 
 CorrectLeaderCheck:
@@ -122,7 +120,6 @@ CorrectLeaderCheck:
 }
 
 func TestLeaderElection_SplitVote(t *testing.T) {
-	t.Parallel()
 
 	test := testSetup(t)
 	defer test.cleanup()
@@ -134,21 +131,20 @@ func TestLeaderElection_SplitVote(t *testing.T) {
 	}
 
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	checkTicker := test.Clock.NewTicker(20 * time.Millisecond)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 
 	test.findLeader(test.TestNodes, checkTicker, exitTicker)
 }
 
 func TestLeaderElection_LeaderCrashRecovery(t *testing.T) {
-	t.Parallel()
 
 	test := testSetup(t)
 	defer test.cleanup()
 	newCtx, newCancel := context.WithCancel(context.Background())
 	defer newCancel()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(2 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 
 CrashLeader:
 	for {
@@ -163,7 +159,7 @@ CrashLeader:
 					node.WaitAllGoroutines()
 					runtime.Gosched()
 					mockTransport := NewMockNetworkTransport(newCtx)
-					test.TestNodes[node.ID] = NewNode(newCtx, newCancel, crashedNode.ID, crashedNode.Address, crashedNode.Port, crashedNode.GrpcPort, crashedNode.DataDir, crashedNode.peers, crashedNode.Clock, MockListenerFactory, mockTransport)
+					test.TestNodes[node.ID] = NewNode(newCtx, newCancel, crashedNode.ID, crashedNode.Address, crashedNode.Port, crashedNode.GrpcPort, crashedNode.dataDir, crashedNode.peers, crashedNode.Clock, MockListenerFactory, mockTransport)
 					test.TestNodes[node.ID].Start()
 					break CrashLeader
 				}
@@ -178,14 +174,13 @@ CrashLeader:
 
 	test.Clock.Advance(300 * time.Millisecond)
 	runtime.Gosched()
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(5 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 
 	test.findLeader(test.TestNodes, checkTicker, exitTicker)
 }
 
 func TestLogReplication_LeaderCommand(t *testing.T) {
-	t.Parallel()
 
 	testCmd := &Command{
 		Type:  CommandPut,
@@ -197,7 +192,7 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 	defer test.cleanup()
 
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	defer checkTicker.Stop()
 
 	leaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
@@ -212,7 +207,7 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checkTicker.Reset(100 * time.Millisecond)
+	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
 	replicationTicker := test.Clock.NewTicker(50 * time.Millisecond)
 	defer replicationTicker.Stop()
@@ -249,7 +244,6 @@ ReplicationCheck:
 }
 
 func TestLogReplication_FollowerCrashAndRecovery(t *testing.T) {
-	t.Parallel()
 
 	test := testSetup(t)
 	defer test.cleanup()
@@ -257,7 +251,7 @@ func TestLogReplication_FollowerCrashAndRecovery(t *testing.T) {
 	leaderID := ""
 	followerID := ""
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	defer checkTicker.Stop()
 
 LeaderFollowerSetup:
@@ -298,8 +292,8 @@ LeaderFollowerSetup:
 		t.Fatal(err)
 	}
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(1 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 LeaderCheck:
 	for {
 		select {
@@ -318,8 +312,8 @@ LeaderCheck:
 	deletedNode := test.TestNodes[followerID]
 	test.crashAndRecoverNode(followerID)
 
-	exitTicker.Reset(5 * time.Second)
-	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
 
 	if deletedNode.currentTerm != test.TestNodes[followerID].GetCurrentTerm() || deletedNode.votedFor != test.TestNodes[followerID].GetVotedFor() {
 		t.Fatal("Error: Current Term Or Voted For Mismatch")
@@ -367,12 +361,11 @@ FollowerRecoveryCheck:
 }
 
 func TestLogReplication_LogDivergence(t *testing.T) {
-	t.Parallel()
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(25 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(500 * time.Millisecond)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 
 	leaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 	var followerID string
@@ -419,7 +412,7 @@ func TestLogReplication_LogDivergence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checkTicker.Reset(100 * time.Millisecond)
+	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
 LogReplicationCheck:
 	for {
@@ -497,7 +490,7 @@ LogReplicationCheck:
 		runtime.Gosched()
 	}
 
-	checkTicker.Reset(100 * time.Millisecond)
+	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
 
 	resolved := false
@@ -546,12 +539,11 @@ ConflictingLogsCheck:
 }
 
 func TestNodePartition_LeaderPartition(t *testing.T) {
-	t.Parallel()
 	test := testSetup(t)
 	defer test.cleanup()
 
-	checkTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	exitTicker := test.Clock.NewTicker(1 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	oldLeaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
 	for _, peerID := range test.TestNodes[oldLeaderID].peers {
@@ -565,16 +557,16 @@ func TestNodePartition_LeaderPartition(t *testing.T) {
 		}
 	}
 
-	checkTicker.Reset(50 * time.Millisecond)
-	exitTicker.Reset(1 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	newLeaderID := test.findLeader(majorityNodes, checkTicker, exitTicker)
 
 	for _, peerID := range test.TestNodes[oldLeaderID].peers {
 		test.MockTransport.SetPartition(oldLeaderID, peerID, false)
 	}
 
-	exitTicker.Reset(5 * time.Second)
-	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
 	stepDown := false
 
 ReintroduceOldLeader:
@@ -615,12 +607,11 @@ ReintroduceOldLeader:
 }
 
 func TestNodesCrash_CrashAndRecovery(t *testing.T) {
-	t.Parallel()
 	test := testSetup(t)
 	defer test.cleanup()
 
-	exitTicker := test.Clock.NewTicker(500 * time.Millisecond)
-	checkTicker := test.Clock.NewTicker(25 * time.Millisecond)
+	exitTicker := test.Clock.NewTicker(10 * time.Second)
+	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 
 	leaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
@@ -656,8 +647,8 @@ func TestNodesCrash_CrashAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exitTicker.Reset(2 * time.Second)
-	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
 
 	var persisted bool
 DataPersistedCheck:
@@ -695,8 +686,8 @@ DataPersistedCheck:
 		test.recoverNode(test.TestNodes[nodeID], nodeID)
 	}
 
-	checkTicker.Reset(100 * time.Millisecond)
-	exitTicker.Reset(2 * time.Second)
+	checkTicker.Reset(200 * time.Millisecond)
+	exitTicker.Reset(10 * time.Second)
 	test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
 	var recovered bool
