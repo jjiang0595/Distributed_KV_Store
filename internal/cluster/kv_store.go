@@ -2,13 +2,16 @@ package cluster
 
 import (
 	"encoding/json"
+	"fmt"
+	"google.golang.org/protobuf/proto"
 	"log"
+	"strings"
 	"sync"
 )
 
 type KVStore struct {
 	mu    sync.Mutex
-	store map[string]string
+	store map[string]*ReviewCommand
 }
 
 type ApplyMsg struct {
@@ -20,7 +23,7 @@ type ApplyMsg struct {
 
 func NewKVStore() *KVStore {
 	kvStore := &KVStore{
-		store: make(map[string]string),
+		store: make(map[string]*ReviewCommand),
 	}
 	return kvStore
 }
@@ -39,31 +42,39 @@ func (kv *KVStore) ApplyCommand(commandBytes []byte) {
 
 	switch cmd.Type {
 	case CommandPut:
-		kv.store[cmd.Key] = cmd.Value
+		reviewCmd := &ReviewCommand{}
+		if err := proto.Unmarshal(cmd.Value, reviewCmd); err != nil {
+			log.Printf("Error unmarshalling command, %v", err)
+			return
+		}
+		key := fmt.Sprintf("recipe:%s:reviews:%s", reviewCmd.RecipeId, reviewCmd.ReviewId)
+		kv.store[key] = reviewCmd
+		log.Printf("Command: %+v", kv.store[key])
 	default:
 		log.Printf("Invalid Command Type: %v", cmd.Type)
 	}
-	log.Printf("Command: %v", kv.store[cmd.Key])
 }
 
-func (kv *KVStore) GetData() map[string]string {
+func (kv *KVStore) GetData(recipeId string) map[string]*ReviewCommand {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	dataCopy := make(map[string]string, len(kv.store))
+	dataCopy := make(map[string]*ReviewCommand, len(kv.store))
 	for k, v := range kv.store {
-		dataCopy[k] = v
+		if strings.HasPrefix(k, fmt.Sprintf("recipe:%s:reviews:", recipeId)) {
+			dataCopy[k] = v
+		}
 	}
 	return dataCopy
 }
 
-func (kv *KVStore) Get(key string) (string, bool) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-
-	if data, ok := kv.store[key]; ok {
-		return data, true
-	} else {
-		return "", false
-	}
-}
+//func (kv *KVStore) Get(key string) (string, bool) {
+//	kv.mu.Lock()
+//	defer kv.mu.Unlock()
+//
+//	if data, ok := kv.store[key]; ok {
+//		return data, true
+//	} else {
+//		return "", false
+//	}
+//}
