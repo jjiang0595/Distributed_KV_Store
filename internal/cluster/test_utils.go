@@ -1,11 +1,12 @@
 package cluster
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"github.com/jonboulle/clockwork"
+	"google.golang.org/protobuf/proto"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sync"
 	"testing"
@@ -95,7 +96,7 @@ func compareLogs(log1 *LogEntry, log2 *LogEntry) bool {
 	if log1.Term != log2.Term || log1.Index != log2.Index {
 		return false
 	}
-	if !bytes.Equal(log1.Command, log2.Command) {
+	if !reflect.DeepEqual(log1.Command, log2.Command) {
 		return false
 	}
 	return true
@@ -203,4 +204,18 @@ func (test *TestCluster) recoverNode(deletedNode *Node, followerID string) *Node
 	testNodes[followerID].Start()
 
 	return testNodes[followerID]
+}
+
+func (test *TestCluster) generateReview(recipeId string, title string, stars float32, body string) []byte {
+	review := &AddReviewRequest{
+		RecipeId: recipeId,
+		Title:    title,
+		Stars:    stars,
+		Body:     body,
+	}
+	reviewBytes, err := proto.Marshal(review)
+	if err != nil {
+		return nil
+	}
+	return reviewBytes
 }
