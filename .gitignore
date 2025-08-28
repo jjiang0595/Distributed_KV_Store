@@ -24,3 +24,4 @@ go.work
 *.gob
 /internal/cluster/logs/
 /.kube
+/pkg/client/logs/
