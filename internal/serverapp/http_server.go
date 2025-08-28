@@ -125,7 +125,7 @@ func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, ke
 	leaderID, isLead := s.getLeaderInfo()
 	if !isLead {
 		if leaderID != "" {
-			http.Redirect(w, r, fmt.Sprintf("http://%s/key/%s", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
+			http.Redirect(w, r, fmt.Sprintf("http://%s/recipes/%s/reviews", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
 		} else {
 			http.Error(w, fmt.Sprintf("Internal Server error: %v", http.StatusNotFound), http.StatusNotFound)
 		}
@@ -180,7 +180,7 @@ func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, ke
 	if err != nil {
 		if strings.Contains(err.Error(), "not leader, current leader is ") {
 			leaderID := strings.TrimPrefix(err.Error(), "not leader, current leader is ")
-			http.Redirect(w, r, fmt.Sprintf("http://%s/key/%s", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
+			http.Redirect(w, r, fmt.Sprintf("http://%s/recipes/%s/reviews", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
 		} else if strings.Contains(err.Error(), "timed out") {
 			http.Error(w, fmt.Sprintf("Client request timed out: %v", err), http.StatusRequestTimeout)
 		} else {
@@ -199,7 +199,7 @@ func (s *HTTPServer) handleGetRequest(w http.ResponseWriter, r *http.Request, ke
 	leaderID, isLead := s.getLeaderInfo()
 	if !isLead {
 		if leaderID != "" {
-			http.Redirect(w, r, fmt.Sprintf("http://%s/key/%s", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
+			http.Redirect(w, r, fmt.Sprintf("http://%s/recipes/%s/reviews", s.peerHTTPAddresses[leaderID], key), http.StatusTemporaryRedirect)
 			return
 		} else {
 			http.Error(w, fmt.Sprintf("Internal Server error: %v", http.StatusNotFound), http.StatusNotFound)
@@ -207,14 +207,19 @@ func (s *HTTPServer) handleGetRequest(w http.ResponseWriter, r *http.Request, ke
 		}
 	}
 
-	value, found := s.node.GetKVStore().Get(key)
-	if !found {
-		log.Printf("key %s not found in kvStore", key)
-		http.Error(w, "value not found", http.StatusNotFound)
+	reviewsMap := s.node.GetKVStore().GetData(key)
+	if len(reviewsMap) == 0 {
+		log.Printf("No reviews found for key %s", key)
+		http.Error(w, "No reviews found", http.StatusNotFound)
 		return
 	}
 
-	jsonBytes, err := json.Marshal(value)
+	reviews := make([]*cluster.ReviewCommand, 0)
+	for _, review := range reviewsMap {
+		reviews = append(reviews, review)
+	}
+
+	jsonBytes, err := json.Marshal(reviews)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
