@@ -116,6 +116,11 @@ func (s *HTTPServer) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func generateReviewID() string {
+	id := uuid.New()
+	return id.String()
+}
+
 func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, key string) {
 	leaderID, isLead := s.getLeaderInfo()
 	if !isLead {
