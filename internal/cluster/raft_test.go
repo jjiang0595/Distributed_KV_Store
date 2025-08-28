@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
@@ -39,7 +40,6 @@ func TestMain(m *testing.M) {
 }
 
 func TestLeaderElection_FindLeader(t *testing.T) {
-
 	test := testSetup(t)
 	defer test.cleanup()
 
@@ -78,7 +78,6 @@ LeaderCheck:
 }
 
 func TestLeaderElection_LeaderStability(t *testing.T) {
-
 	test := testSetup(t)
 	defer test.cleanup()
 
@@ -120,7 +119,6 @@ CorrectLeaderCheck:
 }
 
 func TestLeaderElection_SplitVote(t *testing.T) {
-
 	test := testSetup(t)
 	defer test.cleanup()
 	for _, node := range test.TestNodes {
@@ -137,7 +135,6 @@ func TestLeaderElection_SplitVote(t *testing.T) {
 }
 
 func TestLeaderElection_LeaderCrashRecovery(t *testing.T) {
-
 	test := testSetup(t)
 	defer test.cleanup()
 	newCtx, newCancel := context.WithCancel(context.Background())
@@ -181,15 +178,14 @@ CrashLeader:
 }
 
 func TestLogReplication_LeaderCommand(t *testing.T) {
+	test := testSetup(t)
+	defer test.cleanup()
 
 	testCmd := &Command{
 		Type:  CommandPut,
-		Key:   "testKey",
-		Value: "testValue",
+		Key:   "52877",
+		Value: test.generateReview("52877", "Test Review", 5, "This is a test review"),
 	}
-
-	test := testSetup(t)
-	defer test.cleanup()
 
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
@@ -207,26 +203,24 @@ func TestLogReplication_LeaderCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checkTicker.Reset(200 * time.Millisecond)
-	exitTicker.Reset(10 * time.Second)
-	replicationTicker := test.Clock.NewTicker(50 * time.Millisecond)
-	defer replicationTicker.Stop()
+	leaderData := test.TestNodes[leaderID].kvStore.GetData("52877")
+	leaderCommitIndex := test.TestNodes[leaderID].GetCommitIndex()
+	checkTicker.Reset(50 * time.Millisecond)
+	exitTicker.Reset(5 * time.Second)
 
 	var replicated bool
 ReplicationCheck:
 	for {
 		select {
-		case <-replicationTicker.Chan():
+		case <-checkTicker.Chan():
 			replicated = true
 			for _, node := range test.TestNodes {
-				node.kvStore.mu.Lock()
-				if value, ok := node.kvStore.store[testCmd.Key]; !ok || value != testCmd.Value {
+				if !reflect.DeepEqual(node.kvStore.GetData("52877"), leaderData) || node.GetCommitIndex() != leaderCommitIndex {
 					replicated = false
-					node.kvStore.mu.Unlock()
 					break
 				}
-				node.kvStore.mu.Unlock()
 			}
+
 			if replicated {
 				break ReplicationCheck
 			}
@@ -278,8 +272,8 @@ LeaderFollowerSetup:
 
 	testCmd := &Command{
 		Type:  CommandPut,
-		Key:   "testKey",
-		Value: "testValue",
+		Key:   "52877",
+		Value: test.generateReview("52877", "Test Review", 5, "This is a test review"),
 	}
 
 	cmdToBytes, err := json.Marshal(testCmd)
@@ -292,17 +286,22 @@ LeaderFollowerSetup:
 		t.Fatal(err)
 	}
 
+	leaderCommitIndex := test.TestNodes[leaderID].GetCommitIndex()
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-LeaderCheck:
+ReplicatedCheck:
 	for {
 		select {
 		case <-checkTicker.Chan():
-			if len(test.TestNodes[followerID].kvStore.GetData()) == 1 {
-				break LeaderCheck
+			if leaderCommitIndex == test.TestNodes[followerID].GetCommitIndex() {
+				leaderData := test.TestNodes[leaderID].kvStore.GetData("52877")
+				followerData := test.TestNodes[followerID].kvStore.GetData("52877")
+				if reflect.DeepEqual(leaderData, followerData) {
+					break ReplicatedCheck
+				}
 			}
 		case <-exitTicker.Chan():
-			t.Fatalf("Leader not found within 5 secs")
+			t.Fatalf("Data is not replicated within 10 secs")
 		default:
 			test.Clock.Advance(1 * time.Microsecond)
 			runtime.Gosched()
@@ -327,19 +326,25 @@ FollowerRecoveryCheck:
 			recovered = true
 
 			followerCommitIndex := test.TestNodes[followerID].GetCommitIndex()
-			followerData := test.TestNodes[followerID].kvStore.GetData()
+			followerData := test.TestNodes[followerID].kvStore.GetData("52877")
 
 			leaderCommitIndex := test.TestNodes[leaderID].GetCommitIndex()
-			leaderData := test.TestNodes[leaderID].kvStore.GetData()
+			leaderData := test.TestNodes[leaderID].kvStore.GetData("52877")
 
 			if len(leaderData) != len(followerData) || followerCommitIndex != leaderCommitIndex {
 				recovered = false
 				continue
 			}
 			for leaderKey, leaderValue := range leaderData {
-				if value, ok := test.TestNodes[followerID].kvStore.Get(leaderKey); !ok || value != leaderValue {
+				followerValue, ok := followerData[leaderKey]
+				if !ok {
 					recovered = false
-					break
+					break FollowerRecoveryCheck
+				}
+
+				if !reflect.DeepEqual(leaderValue, followerValue) {
+					recovered = false
+					break FollowerRecoveryCheck
 				}
 			}
 			if recovered {
@@ -380,11 +385,7 @@ func TestLogReplication_LogDivergence(t *testing.T) {
 	}
 
 	leaderNode := test.TestNodes[leaderID]
-	testCmdA := &Command{
-		Type:  CommandPut,
-		Key:   "key_A",
-		Value: "value_A",
-	}
+	testCmdA := test.generateReview("52877", "Test Review", 5, "This is a test review")
 
 	cmdToBytes, err := json.Marshal(testCmdA)
 	if err != nil {
@@ -396,11 +397,7 @@ func TestLogReplication_LogDivergence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	testCmdB := &Command{
-		Type:  CommandPut,
-		Key:   "key_B",
-		Value: "value_B",
-	}
+	testCmdB := test.generateReview("52877", "Test Review B", 5, "This is the second test review")
 
 	cmdToBytes, err = json.Marshal(testCmdB)
 	if err != nil {
@@ -470,11 +467,7 @@ LogReplicationCheck:
 		test.MockTransport.SetPartition(peerID, followerID, false)
 	}
 
-	testCmdE := &Command{
-		Type:  CommandPut,
-		Key:   "key_E",
-		Value: "value_E",
-	}
+	testCmdE := test.generateReview("52877", "Test Review E", 5, "This is the third test review")
 	marshalledCommandE, err := json.Marshal(testCmdE)
 	if err != nil {
 		return
@@ -502,8 +495,8 @@ ConflictingLogsCheck:
 			resolved = true
 			followerLog := followerNode.GetLog()
 			leaderLog := leaderNode.GetLog()
-			leaderData := leaderNode.kvStore.GetData()
-			followerData := followerNode.kvStore.GetData()
+			leaderData := leaderNode.kvStore.GetData("52877")
+			followerData := followerNode.kvStore.GetData("52877")
 
 			if len(followerLog) != len(leaderLog) || len(followerData) != len(leaderData) {
 				resolved = false
@@ -615,11 +608,7 @@ func TestNodesCrash_CrashAndRecovery(t *testing.T) {
 
 	leaderID := test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
-	testCmdA := &Command{
-		Type:  CommandPut,
-		Key:   "key_A",
-		Value: "value_A",
-	}
+	testCmdA := test.generateReview("52877", "Test Review", 5, "This is a test review")
 
 	cmdToBytes, err := json.Marshal(testCmdA)
 	if err != nil {
@@ -631,11 +620,7 @@ func TestNodesCrash_CrashAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	testCmdB := &Command{
-		Type:  CommandPut,
-		Key:   "key_B",
-		Value: "value_B",
-	}
+	testCmdB := test.generateReview("52877", "Test Review", 5, "This is the second test review")
 
 	cmdToBytes, err = json.Marshal(testCmdB)
 	if err != nil {
@@ -660,7 +645,7 @@ DataPersistedCheck:
 				if nodeID == leaderID {
 					continue
 				}
-				if len(test.KvStores[nodeID].GetData()) == 2 {
+				if len(test.KvStores[nodeID].GetData("52877")) == 2 {
 					persisted = false
 					break
 				}
@@ -676,33 +661,40 @@ DataPersistedCheck:
 		}
 	}
 
+	leaderData := test.TestNodes[leaderID].kvStore.GetData("52877")
+	leaderCommitIndex := test.TestNodes[leaderID].GetCommitIndex()
+
 	crashedTestNodes := make(map[string]*Node)
 	for nodeID := range test.TestNodes {
-		deletedNode := test.crashNode(nodeID)
-		crashedTestNodes[nodeID] = deletedNode
+		if nodeID != leaderID {
+			deletedNode := test.crashNode(nodeID)
+			crashedTestNodes[nodeID] = deletedNode
+		}
 	}
 
-	for nodeID := range test.TestNodes {
+	for nodeID := range crashedTestNodes {
 		test.recoverNode(test.TestNodes[nodeID], nodeID)
 	}
 
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-	test.findLeader(test.TestNodes, checkTicker, exitTicker)
 
 	var recovered bool
 RecoveredCheck:
 	for {
 		select {
 		case <-checkTicker.Chan():
-			recovered = false
-			for nodeID, crashedNode := range crashedTestNodes {
-				for key, oldVal := range crashedNode.kvStore.GetData() {
-					if newVal, ok := crashedTestNodes[nodeID].kvStore.Get(key); ok && oldVal == newVal {
-						recovered = true
-					}
+			recovered = true
+			for _, node := range test.TestNodes {
+				nodeData := node.kvStore.GetData("52877")
+				nodeCommitIndex := node.GetCommitIndex()
+
+				if !reflect.DeepEqual(leaderData, nodeData) || leaderCommitIndex != nodeCommitIndex {
+					recovered = false
+					break
 				}
 			}
+
 			if recovered {
 				break RecoveredCheck
 			}
