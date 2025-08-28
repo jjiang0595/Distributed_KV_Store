@@ -24,7 +24,7 @@ type PersistentState struct {
 type Command struct {
 	Type  CommandType
 	Key   string
-	Value string
+	Value []byte
 }
 
 type PutRequest struct {
