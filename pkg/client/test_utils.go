@@ -7,6 +7,7 @@ import (
 	"distributed_kv_store/internal/serverapp"
 	"fmt"
 	"github.com/jonboulle/clockwork"
+	"google.golang.org/protobuf/proto"
 	"io"
 	"log"
 	"net/http"
@@ -152,7 +153,7 @@ func (m *MockHTTPRoundTripper) SetTransientError(failCount int, httpStatus int, 
 }
 
 func (m *MockHTTPRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if m.simulatedDelay > 0 && (req.Method == "PUT" || req.Method == "GET") && strings.HasPrefix(req.URL.Path, "/key/") {
+	if m.simulatedDelay > 0 && (req.Method == "PUT" || req.Method == "GET") && strings.HasPrefix(req.URL.Path, "/recipes") {
 		exitTicker := m.clk.NewTicker(m.simulatedDelay)
 		defer exitTicker.Stop()
 	DelayTest:
@@ -169,7 +170,7 @@ func (m *MockHTTPRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 
 	m.mu.Lock()
 
-	if m.currentFails < m.failCount && (req.Method == "PUT" || req.Method == "GET") && strings.HasPrefix(req.URL.Path, "/key/") {
+	if m.currentFails < m.failCount && (req.Method == "PUT" || req.Method == "GET") && strings.HasPrefix(req.URL.Path, "/recipes") {
 		m.currentFails++
 		if m.simulatedHTTPStatus != 0 {
 			resp := &http.Response{
@@ -303,4 +304,18 @@ func filterSelfID(nodeID string, nodes []string) []string {
 		}
 	}
 	return filteredList
+}
+
+func generateReview(recipeId string, title string, stars float32, body string) []byte {
+	review := &cluster.AddReviewRequest{
+		RecipeId: recipeId,
+		Title:    title,
+		Stars:    stars,
+		Body:     body,
+	}
+	reviewBytes, err := proto.Marshal(review)
+	if err != nil {
+		return nil
+	}
+	return reviewBytes
 }
