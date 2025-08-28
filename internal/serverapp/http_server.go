@@ -133,15 +133,37 @@ func (s *HTTPServer) handlePutRequest(w http.ResponseWriter, r *http.Request, ke
 		return
 	}
 
-	var value cluster.PutRequest
-	if err := json.Unmarshal(body, &value); err != nil {
+	cmd := &cluster.Command{}
+	if err := json.Unmarshal(body, cmd); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	reviewReq := &cluster.AddReviewRequest{}
+	if err := proto.Unmarshal(cmd.Value, reviewReq); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	reviewCmd := &cluster.ReviewCommand{
+		Type:     cluster.ReviewCommand_ADD_REVIEW,
+		RecipeId: reviewReq.RecipeId,
+		ReviewId: generateReviewID(),
+		Title:    reviewReq.Title,
+		Stars:    reviewReq.Stars,
+		Body:     reviewReq.Body,
+	}
+
+	protoBytes, err := proto.Marshal(reviewCmd)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	putCmd := &cluster.Command{
 		Type:  cluster.CommandPut,
 		Key:   key,
-		Value: value.Value,
+		Value: protoBytes,
 	}
 	var cmdToBytes []byte
 	cmdToBytes, err = json.Marshal(putCmd)
