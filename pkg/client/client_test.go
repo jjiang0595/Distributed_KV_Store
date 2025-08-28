@@ -2,13 +2,17 @@ package client
 
 import (
 	"context"
+	"distributed_kv_store/internal/cluster"
 	"errors"
+	"github.com/google/go-cmp/cmp"
 	"github.com/jonboulle/clockwork"
+	"google.golang.org/protobuf/testing/protocmp"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
@@ -44,18 +48,19 @@ func TestClient_Put_LeaderDiscovery(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	test.setupLeader(checkTicker, exitTicker)
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
 
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 3*time.Second)
 	defer cancel()
-	testKey := "testKey"
-	testValue := "testValue"
-	err := test.Client.PUT(ctx, testKey, testValue)
+
+	err := test.Client.PUT(ctx, "52877", "Test Review", 5, "This is my first test review.")
 	if err != nil {
 		t.Errorf("Error putting key: %v", err)
 		return
 	}
 
+	leaderData := test.TestNodes[leaderId].GetKVStore().GetData("52877")
+	leaderCommitIndex := test.TestNodes[leaderId].GetCommitIndex()
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
 
@@ -65,8 +70,11 @@ ReplicationCheck:
 		select {
 		case <-checkTicker.Chan():
 			replicated = true
-			for nodeID := range test.TestNodes {
-				if value, ok := test.KvStores[nodeID].Get(testKey); !ok || value != testValue {
+			for _, node := range test.TestNodes {
+				nodeData := node.GetKVStore().GetData("52877")
+				nodeCommitIndex := node.GetCommitIndex()
+				log.Printf("LEADER %d, NODE %d", leaderCommitIndex, nodeCommitIndex)
+				if nodeCommitIndex != leaderCommitIndex || !reflect.DeepEqual(nodeData, leaderData) {
 					replicated = false
 					break
 				}
@@ -89,23 +97,24 @@ func TestClient_Put_FollowerRedirects(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	followerID, leaderID := test.setupLeader(checkTicker, exitTicker)
+	followerID, leaderId := test.setupLeader(checkTicker, exitTicker)
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
 
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[followerID])
 
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 3*time.Second)
 	defer cancel()
-	testKey := "testKey"
-	testValue := "testValue"
-	err := test.Client.PUT(ctx, testKey, testValue)
+
+	err := test.Client.PUT(ctx, "52877", "Test Review", 5, "This is my first test review.")
 	if err != nil {
 		t.Errorf("Error putting key: %v", err)
 		return
 	}
+	leaderData := test.TestNodes[leaderId].GetKVStore().GetData("52877")
+	leaderCommitIndex := test.TestNodes[leaderId].GetCommitIndex()
 
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
@@ -115,9 +124,10 @@ ReplicationCheck:
 		select {
 		case <-checkTicker.Chan():
 			replicated = true
-			for nodeID := range test.TestNodes {
-				t.Logf("%s: %v", nodeID, test.KvStores[nodeID].GetData())
-				if value, ok := test.KvStores[nodeID].Get(testKey); !ok || value != testValue {
+			for _, node := range test.TestNodes {
+				nodeData := node.GetKVStore().GetData("52877")
+				nodeCommitIndex := node.GetCommitIndex()
+				if nodeCommitIndex != leaderCommitIndex || !reflect.DeepEqual(nodeData, leaderData) {
 					replicated = false
 					break
 				}
@@ -140,25 +150,27 @@ func TestClient_Put_TransientError(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
-	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
+	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderId])
 
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
 
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
 	test.MockHTTPRT.SetTransientError(1, http.StatusServiceUnavailable, nil)
 
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 3*time.Second)
 	defer cancel()
-	testKey := "testKey"
-	testValue := "testValue"
-	err := test.Client.PUT(ctx, testKey, testValue)
+
+	err := test.Client.PUT(ctx, "52877", "Test Review", 5, "This is my first test review.")
 	if err != nil {
 		t.Errorf("Error putting key: %v", err)
 		return
 	}
+
+	leaderData := test.TestNodes[leaderId].GetKVStore().GetData("52877")
+	leaderCommitIndex := test.TestNodes[leaderId].GetCommitIndex()
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
 	var replicated bool
@@ -167,8 +179,10 @@ ReplicationCheck:
 		select {
 		case <-checkTicker.Chan():
 			replicated = true
-			for nodeID := range test.TestNodes {
-				if value, ok := test.KvStores[nodeID].Get(testKey); !ok || value != testValue {
+			for _, node := range test.TestNodes {
+				nodeData := node.GetKVStore().GetData("52877")
+				nodeCommitIndex := node.GetCommitIndex()
+				if nodeCommitIndex != leaderCommitIndex || !reflect.DeepEqual(nodeData, leaderData) {
 					replicated = false
 					break
 				}
@@ -191,19 +205,19 @@ func TestClient_Put_MaxRetries(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
-	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
+	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderId])
 
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
 
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
 	test.MockHTTPRT.SetTransientError(3, http.StatusServiceUnavailable, nil)
 
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 5*time.Second)
 	defer cancel()
-	err := test.Client.PUT(ctx, "testKey", "testValue")
+	err := test.Client.PUT(ctx, "52877", "Test Review", 5, "This is my first test review.")
 	test.cleanup()
 	if err != nil {
 		var maxRetriesErr ErrMaxRetries
@@ -232,18 +246,18 @@ func TestClient_Put_ContextTimeout(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
-	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
+	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderId])
 
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
 
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
 	test.MockHTTPRT.SetDelay(1 * time.Second)
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
 	defer cancel()
-	err := test.Client.PUT(ctx, "testKey", "testValue")
+	err := test.Client.PUT(ctx, "52877", "Test Review", 5, "This is my first test review.")
 
 	if err != nil {
 		var maxRetriesErr ErrMaxRetries
@@ -271,17 +285,24 @@ func TestClient_Get_Success(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
 
-	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderID])
+	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[leaderId])
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 3*time.Second)
 	defer cancel()
-	testKey := "testKey"
-	testValue := "testValue"
-	err := test.Client.PUT(ctx, testKey, testValue)
+
+	err := test.Client.PUT(ctx, "52877", "Test Review", 5, "This is my first test review.")
 	if err != nil {
 		t.Fatalf("Error putting key: %v", err)
 	}
+
+	leaderData := test.TestNodes[leaderId].GetKVStore().GetData("52877")
+
+	var reviewsSlice []*cluster.ReviewCommand
+	for _, review := range leaderData {
+		reviewsSlice = append(reviewsSlice, review)
+	}
+	leaderCommitIndex := test.TestNodes[leaderId].GetCommitIndex()
 
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
@@ -292,9 +313,10 @@ ReplicationCheck:
 		select {
 		case <-checkTicker.Chan():
 			replicated = true
-			for nodeID := range test.TestNodes {
-				t.Logf("%s: %v", nodeID, test.KvStores[nodeID].GetData())
-				if value, ok := test.KvStores[nodeID].Get(testKey); !ok || value != testValue {
+			for _, node := range test.TestNodes {
+				nodeData := node.GetKVStore().GetData("52877")
+				nodeCommitIndex := node.GetCommitIndex()
+				if nodeCommitIndex != leaderCommitIndex || !reflect.DeepEqual(nodeData, leaderData) {
 					replicated = false
 					break
 				}
@@ -310,12 +332,15 @@ ReplicationCheck:
 		}
 	}
 
-	val, err := test.Client.GET(ctx, testKey)
-	if val != testValue {
-		t.Errorf("Wrong value: %s, expected %s", val, testValue)
-	}
+	getCtx, getCancel := clockwork.WithTimeout(context.Background(), test.Clock, 2*time.Second)
+	defer getCancel()
+	reviews, err := test.Client.GET(getCtx, "52877")
 	if err != nil {
-		t.Errorf("Error getting key: %v", err)
+		t.Fatalf("Error getting key: %v", err)
+	}
+
+	if diff := cmp.Diff(reviewsSlice, reviews, protocmp.Transform()); diff != "" {
+		t.Errorf("Values were not equal (-expected +got):\n%s", diff)
 	}
 }
 
@@ -325,17 +350,17 @@ func TestClient_Get_NotFound(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
 
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
 	defer cancel()
-	value, err := test.Client.GET(ctx, "missingKey")
-	if value != "" {
-		t.Error("Error: Expected empty string")
+	value, err := test.Client.GET(ctx, "52877")
+	if value != nil {
+		t.Error("Error: Expected empty object")
 	}
 	if err != nil {
 		var notFoundErr ErrNotFound
@@ -356,17 +381,17 @@ func TestClient_Get_LeaderAddressUpdate(t *testing.T) {
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
 
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
 	test.Client.leaderAddress.Store("")
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
 	defer cancel()
 	_, err := test.Client.GET(ctx, "testKey")
 	if err != nil {
-		if test.Client.leaderAddress.Load() != test.PeerHTTPAddrs[leaderID] {
+		if test.Client.leaderAddress.Load() != test.PeerHTTPAddrs[leaderId] {
 			t.Errorf("Error: Unexpected leader address update")
 		}
 
@@ -387,17 +412,17 @@ func TestClient_Get_FollowerRedirect(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	followerID, leaderID := test.setupLeader(checkTicker, exitTicker)
+	followerID, leaderId := test.setupLeader(checkTicker, exitTicker)
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 	test.Client.leaderAddress.Store(test.PeerHTTPAddrs[followerID])
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
 	defer cancel()
 	_, err := test.Client.GET(ctx, "testKey")
 	if err != nil {
 		var redirectErr ErrRedirect
-		if test.Client.leaderAddress.Load() != test.PeerHTTPAddrs[leaderID] {
+		if test.Client.leaderAddress.Load() != test.PeerHTTPAddrs[leaderId] {
 			t.Errorf("Error: Expected client's leader addresss to be updated")
 		}
 		if errors.As(err, &redirectErr) {
@@ -416,30 +441,33 @@ func TestClient_Get_TransientError(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
-
-	testKey := "testKey"
-	testVal := "testValue"
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
 	putCtx, putCancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
 	defer putCancel()
-	err := test.Client.PUT(putCtx, testKey, testVal)
+	err := test.Client.PUT(putCtx, "52877", "Test Review", 5, "This is my first test review.")
 	if err != nil {
 		t.Fatalf("Error putting key: %v", err)
+	}
+
+	leaderData := test.TestNodes[leaderId].GetKVStore().GetData("52877")
+	var reviewsSlice []*cluster.ReviewCommand
+	for _, review := range leaderData {
+		reviewsSlice = append(reviewsSlice, review)
 	}
 
 	test.MockHTTPRT.SetTransientError(2, http.StatusRequestTimeout, nil)
 	getCtx, getCancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
 	defer getCancel()
-	val, err := test.Client.GET(getCtx, testKey)
-	if val != testVal {
-		t.Errorf("Error: Expected value: %s, got: %s", testVal, val)
+	val, err := test.Client.GET(getCtx, "52877")
+	if diff := cmp.Diff(val, reviewsSlice, protocmp.Transform()); diff != "" {
+		t.Errorf("Values were not equal (-expected +got):\n%s", diff)
 	}
 	if err != nil {
-		t.Fatalf("Error: Fail to get key %s, %s", testKey, err.Error())
+		t.Fatalf("Error: Fail to get key %s, %s", "52877", err.Error())
 	}
 }
 
@@ -449,17 +477,15 @@ func TestClient_Get_MaxRetries(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
 
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
-	key := "testKey"
-	value := "testValue"
 	putCtx, putCancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
 	defer putCancel()
-	err := test.Client.PUT(putCtx, key, value)
+	err := test.Client.PUT(putCtx, "52877", "Test Review", 5, "This is my first test review.")
 	if err != nil {
 		t.Fatalf("Error putting key: %v", err)
 	}
@@ -467,9 +493,9 @@ func TestClient_Get_MaxRetries(t *testing.T) {
 	test.MockHTTPRT.SetTransientError(3, http.StatusRequestTimeout, nil)
 	getCtx, getCancel := clockwork.WithTimeout(context.Background(), test.Clock, 100*time.Millisecond)
 	defer getCancel()
-	val, err := test.Client.GET(getCtx, key)
-	if val != "" {
-		t.Errorf("Error: Expected no value for key %s, got %s", key, val)
+	val, err := test.Client.GET(getCtx, "52877")
+	if val != nil {
+		t.Errorf("Error: Expected no value for key %s, got %s", "52877", val)
 	}
 	if err != nil {
 		var statusTimeoutErr ErrRequestTimeout
@@ -477,8 +503,8 @@ func TestClient_Get_MaxRetries(t *testing.T) {
 			if statusTimeoutErr.StatusCode != http.StatusRequestTimeout {
 				t.Errorf("Error: Expected StatusRequestTimeout, got %d", statusTimeoutErr.StatusCode)
 			}
-			if statusTimeoutErr.Key != key {
-				t.Errorf("Error: Expected Key %s, got %s", key, val)
+			if statusTimeoutErr.Key != "52877" {
+				t.Errorf("Error: Expected Key %s, got %s", "52877", val)
 			}
 		}
 	} else {
@@ -492,17 +518,15 @@ func TestClient_Get_ContextTimeout(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
 
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
-	key := "testKey"
-	value := "testValue"
 	putCtx, putCancel := clockwork.WithTimeout(context.Background(), test.Clock, 150*time.Millisecond)
 	defer putCancel()
-	err := test.Client.PUT(putCtx, key, value)
+	err := test.Client.PUT(putCtx, "52877", "Test Review", 5, "This is my first test review.")
 	if err != nil {
 		t.Fatalf("Error putting key: %v", err)
 	}
@@ -510,7 +534,7 @@ func TestClient_Get_ContextTimeout(t *testing.T) {
 	test.MockHTTPRT.SetDelay(1 * time.Second)
 	getCtx, getCancel := clockwork.WithTimeout(context.Background(), test.Clock, 150*time.Millisecond)
 	defer getCancel()
-	_, err = test.Client.GET(getCtx, key)
+	_, err = test.Client.GET(getCtx, "52877")
 	if err != nil {
 		var maxRetriesErr ErrMaxRetries
 		if errors.As(err, &maxRetriesErr) {
@@ -538,23 +562,23 @@ func TestClient_Get_NonRetryableError(t *testing.T) {
 
 	checkTicker := test.Clock.NewTicker(200 * time.Millisecond)
 	exitTicker := test.Clock.NewTicker(10 * time.Second)
-	_, leaderID := test.setupLeader(checkTicker, exitTicker)
+	_, leaderId := test.setupLeader(checkTicker, exitTicker)
 	checkTicker.Reset(200 * time.Millisecond)
 	exitTicker.Reset(10 * time.Second)
-	test.waitForLeader(leaderID, checkTicker, exitTicker)
+	test.waitForLeader(leaderId, checkTicker, exitTicker)
 
 	test.MockHTTPRT.SetTransientError(1, http.StatusNotFound, nil)
 	ctx, cancel := clockwork.WithTimeout(context.Background(), test.Clock, 150*time.Millisecond)
 	defer cancel()
-	val, err := test.Client.GET(ctx, "testKey")
-	if val != "" {
+	val, err := test.Client.GET(ctx, "52877")
+	if val != nil {
 		t.Errorf("Error: Expected value to be empty")
 	}
 	if err != nil {
 		var statusNotFoundError ErrNotFound
 		if errors.As(err, &statusNotFoundError) {
-			if statusNotFoundError.Key != "testKey" {
-				t.Errorf("Error: Expected key to be testKey")
+			if statusNotFoundError.Key != "52877" {
+				t.Errorf("Error: Expected key to be 52877")
 			}
 			if statusNotFoundError.StatusCode != http.StatusNotFound {
 				t.Errorf("Error: Expected status code to be 404")
