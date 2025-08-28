@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+option go_package = "/internal/cluster";
+
+package cluster;
+
+message ReviewCommand {
+  enum CommandType {
+    UNKNOWN = 0;
+    ADD_REVIEW = 1;
+  }
+  CommandType type = 1;
+  string recipe_id = 2;
+  string review_id = 3;
+  float stars = 4;
+  string title = 5;
+  string body = 6;
+}
+
+message AddReviewRequest {
+  string recipe_id = 1;
+  float stars = 2;
+  string title = 3;
+  string body = 4;
+}
