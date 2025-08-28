@@ -110,7 +110,7 @@ func (c *Client) GetLeader(ctx context.Context) string {
 	return c.leaderAddress.Load().(string)
 }
 
-func (c *Client) PUT(ctx context.Context, key string, value string) error {
+func (c *Client) PUT(ctx context.Context, key string, title string, stars float32, body string) error {
 	if len(c.addresses) == 0 {
 		return fmt.Errorf("no addresses")
 	}
@@ -124,7 +124,7 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 	cmd := &cluster.Command{
 		Type:  cluster.CommandPut,
 		Key:   key,
-		Value: value,
+		Value: generateReview(key, title, stars, body),
 	}
 
 	var cmdToBytes []byte
@@ -143,7 +143,7 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 		statusCode, err = func() (int, error) {
 			var reqBody io.Reader
 			reqBody = bytes.NewBuffer(cmdToBytes)
-			reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
+			reqURL := fmt.Sprintf("http://%s/recipes/%s/reviews", serverAddress, key)
 			req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, reqBody)
 			if err != nil {
 				return 0, fmt.Errorf("fail to create new HTTP request: %w", err)
@@ -230,22 +230,26 @@ func (c *Client) PUT(ctx context.Context, key string, value string) error {
 	}
 }
 
-func (c *Client) GET(ctx context.Context, key string) (string, error) {
+func (c *Client) GET(ctx context.Context, key string) ([]*cluster.ReviewCommand, error) {
 	if len(c.addresses) == 0 {
-		return "", fmt.Errorf("no addresses")
+		return nil, fmt.Errorf("no addresses")
 	}
 	var lastErr error
-	var bodyString string
+	var reviewsArr []*cluster.ReviewCommand
 	retryTime := 50 * time.Millisecond
 	maxRetryTime := 2 * time.Second
 
 	for i := 0; i < c.maxRetries; i++ {
 		serverAddress := c.GetLeader(ctx)
+		if serverAddress == "" {
+			return nil, fmt.Errorf("server address not found")
+		}
 
-		reqURL := fmt.Sprintf("http://%s/key/%s", serverAddress, key)
+		reqURL := fmt.Sprintf("http://%s/recipes/%s/reviews", serverAddress, key)
+		log.Printf("REQ URL IS %s", reqURL)
 		httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 		if err != nil {
-			return "", fmt.Errorf("fail to create new HTTP request: %w", err)
+			return nil, fmt.Errorf("fail to create new HTTP request: %w", err)
 		}
 
 		statusCode, err := func() (int, error) {
@@ -264,8 +268,7 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 				if err != nil {
 					return 0, err
 				}
-
-				if err := json.Unmarshal(body, &bodyString); err != nil {
+				if err := json.Unmarshal(body, &reviewsArr); err != nil {
 					return 0, fmt.Errorf("fail to unmarshal JSON response: %w", err)
 				}
 				return http.StatusOK, nil
@@ -293,13 +296,13 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 
 		if err == nil {
 			if statusCode >= 200 && statusCode <= 299 {
-				return bodyString, nil
+				return reviewsArr, nil
 			}
 			if statusCode >= 300 && statusCode <= 399 {
 				continue
 			}
 			if statusCode == http.StatusNotFound || statusCode == http.StatusInternalServerError {
-				return "", lastErr
+				return nil, lastErr
 			}
 			if statusCode == http.StatusRequestTimeout || statusCode == http.StatusServiceUnavailable {
 				log.Printf("Attempt %d: Retrying GET request...", i+1)
@@ -323,7 +326,7 @@ func (c *Client) GET(ctx context.Context, key string) (string, error) {
 			continue
 		}
 	}
-	return "", ErrMaxRetries{
+	return nil, ErrMaxRetries{
 		Type:    http.MethodGet,
 		Retries: c.maxRetries,
 		LastErr: lastErr,
