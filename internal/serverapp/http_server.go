@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
+	"google.golang.org/protobuf/proto"
 	"io"
 	"log"
 	"net/http"
@@ -37,18 +40,18 @@ func (s *HTTPServer) GetServer() *http.Server {
 }
 
 func NewHTTPServer(node *cluster.Node, proposeCmd func(cmd []byte) error, getLeaderInfo func() (string, bool), peerHTTPAddresses map[string]string, port int) *HTTPServer {
-	mux := http.NewServeMux()
+	r := mux.NewRouter()
 	s := &HTTPServer{
 		node:              node,
 		proposeCommand:    proposeCmd,
 		getLeaderInfo:     getLeaderInfo,
-		server:            &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux},
+		server:            &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: r},
 		peerHTTPAddresses: peerHTTPAddresses,
 		port:              port,
 	}
-	mux.HandleFunc("/key/", s.handleKeyRequest)
-	mux.HandleFunc("/status", s.handleStatusRequest)
-	mux.HandleFunc("/healthz", s.handleLivenessProbe)
+	r.HandleFunc("/recipes/{recipeId}/reviews", s.handleKeyRequest)
+	r.HandleFunc("/status", s.handleStatusRequest)
+	r.HandleFunc("/healthz", s.handleLivenessProbe)
 	return s
 }
 
@@ -97,18 +100,19 @@ func (s *HTTPServer) handleStatusRequest(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *HTTPServer) handleKeyRequest(w http.ResponseWriter, r *http.Request) {
-	key := r.URL.Path[len("/key/"):]
+	vars := mux.Vars(r)
+	recipeId := vars["recipeId"]
 
-	if key == "" {
+	if recipeId == "" {
 		http.Error(w, "key not found", http.StatusNotFound)
 		return
 	}
 
 	switch r.Method {
 	case "PUT":
-		s.handlePutRequest(w, r, key)
+		s.handlePutRequest(w, r, recipeId)
 	default:
-		s.handleGetRequest(w, r, key)
+		s.handleGetRequest(w, r, recipeId)
 	}
 }
 
