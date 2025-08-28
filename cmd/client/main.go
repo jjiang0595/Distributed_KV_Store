@@ -70,5 +70,4 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
 	err = c.PUT(ctx, "key", "value")
-
 }
